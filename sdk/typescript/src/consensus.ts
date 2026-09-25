@@ -34,6 +34,7 @@ export const FAMILY_TABLE_DOMAIN = Buffer.from("basanos/dcg-rs1-table/1", "ascii
 export const UNIFIED_VERSION = 1;
 export const STORAGE_ROOT_ONLY = 1;
 export const COMMITMENT_VERSION = 3;
+export const MACHINE_NAME = Buffer.from("basanos/qwen35-4b-a16/1", "ascii");
 export const MAX_FAMILIES = 24;
 export const MAX_SEGMENTS = 128;
 export const MAX_RS1_HEIGHT = 19;

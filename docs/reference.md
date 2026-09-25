@@ -139,7 +139,7 @@ The text blocks below are extracted from the normative specification.
  16  row_count:u32        1..=64
  20  rows_written:u32
  24  authority[32]        the compiled registry authority
- 56  machine_name[64]     the image's machine name, NUL-padded: "the configured machine name" (Q12)
+ 56  machine_name[64]     the image's machine name, NUL-padded: "basanos/qwen35-4b-a16/1" (Q12)
 120  census_digest[32]    nonzero
 152  table_root[32]       zero until frozen
 184  zero[8]
