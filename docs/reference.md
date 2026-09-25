@@ -1,12 +1,12 @@
 # DCG builder reference
 
-Generated from `dcg-unified-v1.md` (spec: to be published), revision 6, dated 2026-09-24.
+Generated from `dcg-unified-v1.md` (spec: to be published), revision 7, dated 2026-09-25.
 
-Specification SHA-256: `d6f3f92cbbd4dc49770ddccac2b0057c548661a80082592070b67f95d33f5b4a`
+Specification SHA-256: `1358c31e2f947cc99eff3e63b5381d370c7853fcd50ea9516ea4f3455f788185`
 
 This page is generated from the unpublished protocol specification and should not be edited by hand.
 
-The program address and SDK entry points are deployment placeholders. This reference describes wire and account mechanics, not model quality.
+The mainnet alpha program addresses are in the [quickstart](quickstart.md). This reference describes wire and account mechanics, not model quality.
 
 ## Instruction tags
 
@@ -41,6 +41,7 @@ The unified-format allocation is parsed from specification §10. CloseResponseV5
 | 180 | `SelectSummaryV5` | Challenger | §8.3.5 |
 | 181 | `AnswerSummaryV5` | Anyone | §8.3.5 |
 | 182 | `CloseResponseV5` | Anyone after a DCR1 v5 ruling | §7.4 |
+| 185 | `CloseResultV6` | Anyone at or after the retention deadline | §6.12 |
 
 ### Reused response and ruling tags
 
@@ -86,12 +87,13 @@ The unified specification starts from a sealed PT2S. These unchanged tags remain
 | `PT2S` | existing, unchanged (`pt2p_onchain.rs:29-45`) | sealed PT2P plan: base triple digests, `PWR1`, clause-12 v4, definition SHA-256 | caller account (not a PDA) |
 | `DRP2` | new | frozen per-form registry, row version 2 | `"dcg-envelope-registry-pt2" \| EPOCH:u32 \| registry_id:u32` |
 | `DEA2` | new | class-admission record | `"dcg-envelope-admission-v2" \| registry[32] \| PT2S[32] \| P:u32` |
-| `DCM2` v5 | new version | document header, no manifest | `"dcg-hcl-document" \| descriptor` (unchanged seed) |
+| `DCM2` v6 | new version (rev 7; v5 is the revision-6 program) | document header, no manifest | `"dcg-hcl-document" \| descriptor` (unchanged seed) |
 | `DPR2` v1 | unchanged layout | landed position roots (LandPositionRoots) | `"dcg-hcl-positions" \| descriptor` (unchanged) |
 | `DFS2` | new (rev 2) | the DFS2 family slot table; no roots | `"dcg-hcl-family-slots" \| descriptor` |
 | `DSR1` | not used by v5 | — | — |
 | `DCR1` v5 | new version | ROOT_ONLY challenge record with convict | rev 4: `"dcg-unified-challenge" \| descriptor \| challenger \| nonce:u32`, 8,192 bytes, created by the opening instruction (rev 3: challenger-created, as v3/v4) |
-| `DCR2` v4 | new version (rev 4; rev 3's v3 withdrawn) | the result record other programs read: status, proven outputs, request binding, every dispute term (§6.9) | `"dcg-hcl-result" \| descriptor` (unchanged seed), created by UnifiedInit |
+| `DCR2` v5 | new version (rev 7; v4 is the revision-6 program) | the result record other programs read: status, proven outputs, request binding, every run term and the retention fields; replaced by the 96-byte `DCRZ` tombstone at tag 185 (§6.9) | `"dcg-hcl-result" \| descriptor` (unchanged seed), created by UnifiedInit |
+| settlement escrow | new (rev 7) | transient pot holder during a custom settle; assigned to the settlement program for the callback and emptied (§7.4) | `"dcg-hcl-settlement" \| challenge` |
 | `DCF1` | new (rev 4) | program config: admin, registry-admission authority, template-seal authority (§16.1) | `"dcg-config"` |
 | `DTA1` | new (rev 4) | template-seal approval of one sealed PT2S at one SHA-256 (§16.2) | `"dcg-template-seal" \| PT2S \| PT2S_sha256` |
 
@@ -139,7 +141,8 @@ The text blocks below are extracted from the normative specification.
  16  row_count:u32        1..=64
  20  rows_written:u32
  24  authority[32]        the compiled registry authority
- 56  machine_name[64]     the image's machine name, NUL-padded: "basanos/qwen35-4b-a16/1" (Q12)
+ 56  machine_name[64]     an accepted machine name, NUL-padded: "basanos/qwen35-4b-a16/1" (Q12)
+                          or, revision 6.1, "basanos/qwen35-4b-a16/2" (V7)
 120  census_digest[32]    nonzero
 152  table_root[32]       zero until frozen
 184  zero[8]
@@ -193,8 +196,8 @@ The text blocks below are extracted from the normative specification.
 ### DPD2 descriptor preimage
 
 ```text
-"basanos/dcg-unified-descriptor/3"        32 ASCII bytes (rev 4; /1 and /2 withdrawn unimplemented)
-unified_version:u16 = 1
+"basanos/dcg-unified-descriptor/4"        32 ASCII bytes (rev 7; /3 is the rev-4..6 program identity)
+unified_version:u16 = 2
 storage_mode:u8 = 1                       ROOT_ONLY (Q6)
 commitment_version:u8 = 3                 §8
 position_count:u32                        P
@@ -204,7 +207,7 @@ rs1_height:u8                             H = ⌈log2 P⌉
 pt2p_compiler_version:u8                  pinned profile of PWR1 (pt2p_compiler.py)
 reserved:u16 = 0
 total_entries:u64                         Σ_{p<P} entry_count(p)
-dispute_terms[48]                         DDT1 (rev 3, §6.8): every dispute term of the run
+dispute_terms[96]                         DDT2 (rev 7, §6.8): every dispute, settlement and retention term of the run
 run_binding[160]                          DRB1 (rev 4, §6.10): executor, request binding, seed, outputs
 clause12_v4[43]                           the PT2S's (P, segment count, PWR1 digest)
 definition_sha256[32]                     the PT2S's
@@ -218,11 +221,11 @@ registry_table_root[32]
 dfs2_sha256[32]                           SHA-256 of the DFS2 body
 ```
 
-### DCM2 v5 document header
+### DCM2 v6 document header
 
 ```text
    0  magic "DCM2"
-   4  version:u16 = 5
+   4  version:u16 = 6
    6  flags:u16             1 armed, 2 finalized, 4 refuted, 8 closed, 16 ROOT_ONLY, 32 sealed;
                             16|32 always set; other bits zero
    8  descriptor[32]        DPD2 digest
@@ -240,7 +243,7 @@ dfs2_sha256[32]                           SHA-256 of the DFS2 body
  136  finalize_slot:u64
  144  dispute_deadline:u64  LSD1 at FinalizeDocumentV5
  152  prefix_root[32]       v3 prefix root after positions_complete positions (batch end)
- 184  challenge_window_slots:u64   = DDT1 bytes 8..16 (rev 3; LSD1 reads it here)
+ 184  challenge_window_slots:u64   = DDT2 bytes 8..16 (LSD1 reads it here)
  192  total_entries:u64
  200  PT2S[32]
  232  PT2S_sha256[32]
@@ -260,9 +263,9 @@ dfs2_sha256[32]                           SHA-256 of the DFS2 body
  529  executor_bond_state:u8   rev 3: 0 none (bond 0), 1 held, 2 paid on refutation, 3 returned at close
  530  reserved[6] = 0
  536  peaks[32] × 40        level:u8 | zero[3] | first:u32 | digest[32]; unused slots zero
-1816  dispute_terms[48]     DDT1 (§6.8), written at init, never changed
-1864  run_binding[160]      DRB1 (§6.10, rev 4), written at init, never changed; seed at 1,968
-2024  end
+1816  dispute_terms[96]     DDT2 (§6.8), written at init, never changed
+1912  run_binding[160]      DRB1 (§6.10), written at init, never changed; seed at 2,016
+2072  end
 ```
 
 ### DFS2 family-slot account
@@ -279,28 +282,32 @@ dfs2_sha256[32]                           SHA-256 of the DFS2 body
  48  DFS2 body (§6.2)
 ```
 
-### DDT1 dispute terms
+### DDT2 run terms
 
 ```text
- 0  magic "DDT1"
- 4  version:u16 = 1
- 6  reserved:u16 = 0
- 8  challenge_window_slots:u64     a challenge may open until finalize_slot + this
-16  response_window_slots:u64      every per-round deadline is phase-change slot + this
-24  challenger_bond_lamports:u64   escrowed by each challenger at open; any value, 0 allowed
-32  executor_bond_lamports:u64     escrowed by the executor at UnifiedInit; any value, 0 allowed
-40  executor_reward_bps:u16        share of the executor bond paid to the challenger, 0..=10,000
-42  reserved[6] = 0
-48  end
+  0  magic "DDT2"
+  4  version:u16 = 1
+  6  reserved:u16 = 0
+  8  challenge_window_slots:u64     a challenge may open until finalize_slot + this
+ 16  response_window_slots:u64      every per-round deadline is phase-change slot + this
+ 24  challenger_bond_lamports:u64   escrowed by each challenger at open; any value, 0 allowed
+ 32  executor_bond_lamports:u64     escrowed by the executor at UnifiedInit; any value, 0 allowed
+ 40  executor_reward_bps:u16        built-in rule's share of the executor bond, 0..=10,000
+ 42  reserved:u16 = 0
+ 44  reserved:u32 = 0
+ 48  settlement_program[32]         zero = built-in rule; nonzero = BSS1 program
+ 80  custom_settle_window_slots:u64 opportunity window after a challenger ruling
+ 88  result_retention_slots:u64     result lifetime after CloseDocumentV5
+ 96  end
 ```
 
-### DCR2 v4 result record
+### DCR2 v5 result record and DCRZ tombstone
 
 ```text
-  0  magic "DCR2"               discriminator
-  4  version:u16 = 4
+  0  magic "DCR2"               discriminator while outputs are retained
+  4  version:u16 = 5
   6  status:u8                  0 PENDING, 1 FINAL, 2 REFUTED, 3 SETTLED
-  7  closed:u8                  1 once CloseDocumentV5 ran, else 0
+  7  document_closed:u8         1 once CloseDocumentV5 ran, else 0
   8  descriptor[32]
  40  document_root[32]          zero until FinalizeDocumentV5
  72  request_id[32]             DRB1; opaque to DCG (Tier C: the request account address)
@@ -315,9 +322,12 @@ dfs2_sha256[32]                           SHA-256 of the DFS2 body
 204  outputs_attested:u32       popcount of the bitmap
 208  output_width:u8            DRB1, 1..=32
 209  zero[7]
-216  dispute_terms[48]          DDT1, copied from DCM2 at init; immutable
-264  outputs[output_count][output_width]   zero until attested
-264 + count·width  attested bitmap, ⌈count/8⌉ bytes, LSB-first, write-once
+216  run_terms[96]              DDT2, copied from DCM2 at init; immutable
+312  retention_slots:u64        DDT2.result_retention_slots; nonzero at init
+320  retention_start_slot:u64   0 until CloseDocumentV5; never changes afterward
+328  retention_deadline:u64     checked start + retention_slots; 0 until start
+336  outputs[output_count][output_width]   zero until attested
+336 + count·width  attested bitmap, ⌈count/8⌉ bytes, LSB-first, write-once
 ```
 
 ### DRB1 run binding
@@ -349,7 +359,7 @@ segment_ordinal:u16 | path_count:u8 | 0:u8 | segment_table_root[32] | sibling[pa
 
 ```text
   0  magic "DLE1"
-  4  version:u16 = 1
+  4  version:u16 = 2   (revision 7; version 1 is the revision-6 program)
   6  kind:u8
   7  zero:u8
   8  descriptor[32]
@@ -376,8 +386,8 @@ segment_ordinal:u16 | path_count:u8 | 0:u8 | segment_table_root[32] | sibling[pa
 184  sampling_params[32]      zero for sampler 0
 216  seed[32]                 = DRB1 seed; zero for sampler 0
 248  machine_id[32]           the Tier C machine (template, model, geometry)
-280  dispute_terms[48]        = the document's DDT1
-328  end
+280  run_terms[96]            DDT2; must equal the document's block
+376  end
 ```
 
 ### DCR1 v5 revision regions
@@ -427,11 +437,12 @@ All PDAs use the deployed DCG program unless the table says otherwise. Integer s
 | DRP2 | `"dcg-envelope-registry-pt2" \| EPOCH:u32 \| registry_id:u32` |
 | DTA1 | `"dcg-template-seal" \| PT2S \| PT2S_sha256` |
 | DEA2 | `"dcg-envelope-admission-v2" \| DRP2 \| PT2S \| P:u32` |
-| DCM2 v5 | `"dcg-hcl-document" \| descriptor` |
+| DCM2 v6 | `"dcg-hcl-document" \| descriptor` |
 | DPR2 | `"dcg-hcl-positions" \| descriptor` |
 | DFS2 | `"dcg-hcl-family-slots" \| descriptor` |
-| DCR2 v4 | `"dcg-hcl-result" \| descriptor` |
-| DCR1 v5 | `"dcg-unified-challenge" \| descriptor \| challenger \| nonce:u32` (rev 4; created by 166, 167 and, rev 5, 171) |
+| DCR2 v5 / DCRZ | `"dcg-hcl-result" \| descriptor` |
+| DCR1 v5 | `"dcg-unified-challenge" \| descriptor \| challenger \| nonce:u32` (created by 166, 167 and 171) |
+| settlement escrow | `"dcg-hcl-settlement" \| challenge[32]` |
 | Tier C request | `"tco-request" \| requester \| nonce:u64` under the Tier C program (its address is the request id, §16.6) |
 | DRU1 | `"dcg-hcl-response" \| challenge[32]` (§7.4) |
 | ProgramData | upgradeable-loader PDA `[program_id]` (§16.1) |
@@ -448,10 +459,11 @@ Revision 6 permits a predictable account to hold lamports before creation. The c
 | 4 | `challenge_open` | 166, 167, 171 (rev 5) | challenge[32] (DCR1 address), challenger[32], position:u32 (171: the family index), challenge_kind:u8 (1 leaf, 2 position, 3 summary), zero[3], deadline:u64, bond:u64 (88) |
 | 5 | `respond` | 163, 164, 168, 169, 173, the respond tags, 170, 179, 180, 181 (rev 5) | challenge[32], tag:u8, actor:u8 (1 executor, 2 challenger, 0 any signer: 181), phase_from:u8, phase_to:u8, zero:u32, deadline:u64 (48) |
 | 6 | `ruling` | every RULE (§7.9): 166/168/169 convicts, the respond verdict (incl. 181), 132 | challenge[32], winner:u8, cause:u8, zero:u16, code:u32, challenger_wins:u32, zero:u32 (48) |
-| 7 | `settle` | 131 | challenge[32], winner[32], bond_paid:u64, executor_reward:u64, executor_burned:u64 (88) |
+| 7 | `settle` | 131 | challenge[32], winner[32], record_bond_paid:u64, settlement_pot:u64, winner_payout:u64, loser_payout:u64, burn_payout:u64, route:u8 (1 built-in, 2 custom, 3 fallback), zero[7] (112) |
 | 8 | `close` | 172 | executor[32], refund:u64, executor_bond_returned:u64, result_status:u8, finalized:u8, zero[6] (56) |
 | 9 | `output` | 177 | index:u32, outputs_attested:u32, position:u32, width:u8, zero[3], value[32] (48) |
 | 10 | `resolve` | 178 | status:u8, zero[3], challenger_wins:u32, outputs_attested:u32, zero:u32 (16) |
+| 11 | `close_result` | 185 | executor[32], refund:u64, retention_start_slot:u64, retention_deadline:u64, closed_slot:u64, zero:u32 (68) |
 
 Event rules:
 
@@ -474,13 +486,14 @@ Event rules:
 | **788** | `APPEND_ORDER` | LandPositionRoots with `first ≠ positions_complete` (gap, overlap or replay; the v3 append is in position order) |
 | **789** | `REVEAL_MISMATCH` | a revealed child set does not reproduce the landed commitment (position reveal vs DPR2, FTR vs DCM2 488, SPP1 table root ≠ derived), or a revealed child is zero |
 | **790** | `REVEAL_ORDER` | a reveal chunk with `first` neither 0 nor the staged count, or past the child count |
-| **791** | `DISPUTE_TERMS` | (rev 3) a DDT1 block is malformed (magic, version, length, reserved bytes) or fails a mechanical check of §6.8: challenge window 0 or over 2^62, response window below `ROUND_FLOOR_SLOTS` or over 2^62, reward share over 10,000 bps |
+| **791** | `DISPUTE_TERMS` | a DDT2 block is malformed or fails §6.8: a window or retention value outside its mechanical bounds, reward over 10,000 bps, or the settlement program/window zero relation fails |
 | **792** | `CONFIG_AUTHORITY` | (rev 4) DCF1 not the PDA, not system-owned with no data at init (revision 6: it may hold lamports, topped up, §7.1), or malformed; ConfigInit not signed by the ProgramData upgrade authority, or the program/ProgramData accounts do not match; a role instruction not signed by the role's current key (a zero key disables the role); a new admin that does not co-sign; any rotation of a frozen (zero-admin) config |
 | **793** | `TEMPLATE_SEAL` | (rev 4) no DTA1 approval in state 1 for `(PT2S, SHA-256 of the PT2S data)`; TemplateSeal on a PT2S that is not sealed, or approve/revoke from the wrong state |
 | **794** | `RUN_BINDING` | (rev 4) a DRB1 block is malformed or fails §6.10: executor ≠ signer, request id and consumer digest not both zero or both nonzero, outputs past `P`, width outside 1..=32, a retired, missing, T-scaled or range output write, or a width that differs from the write length, or a DCR2 over 10 MiB |
 | **795** | `OUTPUT_PROOF` | (rev 4) AttestOutputV5: the output is already attested or the result is closed, the leaf's write row, the leaf path or the SPP1 does not reach the landed DPR2 root at the derived coordinate |
 | **796** | `RESULT_STATE` | (rev 4) ResolveResultV5 when the status is not PENDING, the record is closed, or neither REFUTED nor FINAL holds yet; CloseDocumentV5 of an unrefuted finalized document with an output unattested |
 | **797** | `SUMMARY_PRODUCER` | (rev 5) a summary slot answer's producer does not match the sealed slot: the DCL2 preimage is malformed or for another descriptor, its coordinate is not the derived `(q, segment, local)`, it has no write row `write_ordinal`, or that row is not `(region(f), q · stride(f), stride(f))` (§8.3.5) |
+| **798** | `SETTLEMENT_PROGRAM` | (rev 7) a custom settlement callback returns success but leaves escrow lamports, reduces a recipient's net lamports, or the tag-131 custom/fallback account list does not match DDT2; a failed CPI retains its callee error because Solana cannot return control |
 
 ### Reused closure, DCR1, and ESL1 codes
 

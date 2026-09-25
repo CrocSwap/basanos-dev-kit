@@ -1,4 +1,4 @@
-"""Compare SDK instruction builders with the checked revision-6 lifecycle plan.
+"""Compare SDK instruction builders with a checked revision-7 lifecycle plan.
 
 The retained plan is an external experiment receipt, not a source import. Set
 ``BASANOS_LIFECYCLE_PLAN`` to its ``plan.jsonl`` path when running in a fresh
@@ -24,7 +24,11 @@ pytestmark = pytest.mark.skipif(PLAN is None, reason="retained lifecycle plan is
 
 @pytest.fixture(scope="module")
 def rows() -> dict[str, dict]:
-    return {row["label"]: row for row in (json.loads(line) for line in PLAN.read_text().splitlines()) if "label" in row}
+    value = {row["label"]: row for row in (json.loads(line) for line in PLAN.read_text().splitlines()) if "label" in row}
+    init = value.get("H:init")
+    if init is None or len(bytes.fromhex(init["data"])) != 533 or bytes.fromhex(init["data"])[1:5] != b"DDT2":
+        pytest.skip("retained lifecycle plan is not revision 7")
+    return value
 
 
 def address(row: dict, index: int) -> Pubkey:
@@ -48,12 +52,12 @@ def test_revision_lifecycle_builders_match_plan_bytes(rows: dict[str, dict]) -> 
     family_slots = address(init_row, 3)
     pt2s, routes, geometry, payloads, registry, admission, seal, result = (address(init_row, index) for index in (5, 6, 7, 8, 9, 10, 11, 12))
     init_data = bytes.fromhex(init_row["data"])
-    terms = c.DisputeTerms.decode(init_data[1:49])
-    binding = c.RunBinding.decode(init_data[49:209])
-    family_body = init_data[307:]
+    terms = c.RunTerms.decode(init_data[1:97])
+    binding = c.RunBinding.decode(init_data[97:257])
+    family_body = init_data[353:]
     got_init = ix.unified_init(program, executor, document, positions, family_slots, c.SYSTEM_PROGRAM, pt2s, routes,
-                              geometry, payloads, registry, admission, seal, result, terms, binding,
-                              init_data[209:241], init_data[241:273], init_data[273:305], family_body)
+                               geometry, payloads, registry, admission, seal, result, terms, binding,
+                               init_data[257:289], init_data[289:321], init_data[321:353], family_body)
     assert_instruction(got_init, init_row)
 
     land_row = rows["H:land:0"]
@@ -74,11 +78,10 @@ def test_revision_lifecycle_builders_match_plan_bytes(rows: dict[str, dict]) -> 
     open_row = rows["A:open"]
     open_data = bytes.fromhex(open_row["data"])
     position = int.from_bytes(open_data[33:37], "little")
-    response_length = int.from_bytes(open_data[37:41], "little")
-    nonce = int.from_bytes(open_data[41:45], "little")
+    nonce = int.from_bytes(open_data[37:41], "little")
     assert_instruction(ix.challenge_position(program, address(open_row, 0), address(open_row, 1), address(open_row, 2),
                                              address(open_row, 3), address(open_row, 5), address(open_row, 6), address(open_row, 7),
-                                             address(open_row, 8), open_data[1:33], position, response_length, nonce), open_row)
+                                             address(open_row, 8), open_data[1:33], position, nonce), open_row)
 
     reveal_row = rows["A:reveal:0"]
     reveal_data = bytes.fromhex(reveal_row["data"])
@@ -162,8 +165,8 @@ def test_all_supported_non_executor_plan_rows_match_builders(rows: dict[str, dic
                                     int.from_bytes(data[1:5], "little"), int.from_bytes(data[5:7], "little"))
         elif tag == 161:
             got = ix.unified_init(program, *[meta[0] for meta in metas[:13]],
-                                  c.DisputeTerms.decode(data[1:49]), c.RunBinding.decode(data[49:209]),
-                                  data[209:241], data[241:273], data[273:305], data[307:])
+                                  c.RunTerms.decode(data[1:97]), c.RunBinding.decode(data[97:257]),
+                                  data[257:289], data[289:321], data[321:353], data[353:])
         elif tag == 162:
             count = data[37]
             roots = [data[38 + 32 * index:70 + 32 * index] for index in range(count)]
@@ -182,20 +185,19 @@ def test_all_supported_non_executor_plan_rows_match_builders(rows: dict[str, dic
             roots = [data[35 + 32 * index:67 + 32 * index] for index in range(count)]
             got = ix.finalize_document(program, metas[0][0], metas[1][0], metas[2][0], data[1:33], roots)
         elif tag == 166:
-            height = data[79]
-            at = 80 + 32 * height
+            height = data[75]
+            at = 76 + 32 * height
             got = ix.challenge_leaf(program, metas[0][0], metas[1][0], metas[2][0], metas[3][0], metas[5][0], metas[6][0],
                                     metas[7][0], metas[8][0], metas[9][0],
                                     c.encode_challenge_leaf(data[1:33], int.from_bytes(data[33:37], "little"),
                                                             int.from_bytes(data[37:39], "little"), int.from_bytes(data[39:43], "little"),
                                                             data[43:75],
-                                                            [data[80 + 32 * index:80 + 32 * (index + 1)] for index in range(height)],
-                                                            data[at:-4], int.from_bytes(data[75:79], "little"),
-                                                            int.from_bytes(data[-4:], "little")))
+                                                            [data[76 + 32 * index:76 + 32 * (index + 1)] for index in range(height)],
+                                                            data[at:-4], int.from_bytes(data[-4:], "little")))
         elif tag == 167:
             got = ix.challenge_position(program, metas[0][0], metas[1][0], metas[2][0], metas[3][0], metas[5][0], metas[6][0],
                                          metas[7][0], metas[8][0], data[1:33], int.from_bytes(data[33:37], "little"),
-                                         int.from_bytes(data[37:41], "little"), int.from_bytes(data[41:45], "little"))
+                                         int.from_bytes(data[37:41], "little"))
         elif tag == 168:
             count = data[1]
             has_root = len(data) == 2 + 32 * (count + 1)
@@ -235,7 +237,7 @@ def test_all_supported_non_executor_plan_rows_match_builders(rows: dict[str, dic
         assert_instruction(got, row)
 
 
-def test_current_revision6_settle_includes_response_and_executor() -> None:
+def test_current_revision7_settle_includes_response_and_executor() -> None:
     program = Pubkey.from_bytes(bytes([9]) * 32)
     keys = [Pubkey.from_bytes(bytes([value]) * 32) for value in range(1, 7)]
     instruction = ix.settle(program, *keys)

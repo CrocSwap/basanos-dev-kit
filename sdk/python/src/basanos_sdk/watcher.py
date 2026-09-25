@@ -64,12 +64,12 @@ class Watcher:
                            pt2s_sha256=self.accounts.pt2s_sha256, challenger=challenger,
                            nonce=nonce, registry=self.accounts.registry, position_count=position_count)
 
-    def read_document(self, descriptor: bytes) -> c.Dcm2V5:
+    def read_document(self, descriptor: bytes) -> c.Dcm2V6:
         book = self.book(descriptor)
         account = self.rpc.read_account(book.document[0])
         if account is None:
             raise LookupError("document account is absent")
-        return c.Dcm2V5.decode(account.data)
+        return c.Dcm2V6.decode(account.data)
 
     def positions(self, descriptor: bytes) -> list[bytes]:
         book = self.book(descriptor)
@@ -89,23 +89,22 @@ class Watcher:
         return int.from_bytes(value[:8], "little") % position_count
 
     def open_position(self, descriptor: bytes, challenger: Pubkey | str | bytes | bytearray, position: int,
-                      *, response_length: int, nonce: int) -> ChallengeHandle:
+                      *, nonce: int) -> ChallengeHandle:
         who = c.key_bytes(challenger)
         book = self.book(descriptor, challenger=who, nonce=nonce)
         record = book.challenge[0]
-        data = c.encode_challenge_position(descriptor, position, response_length, nonce)
         instruction = ix.challenge_position(self.accounts.dcg_program, record, who, book.document[0], book.positions[0],
                                             self.accounts.pt2s, self.accounts.routes, self.accounts.geometry,
-                                            self.accounts.registry, self.accounts.pt1s, data)
+                                            self.accounts.registry, descriptor, position, nonce)
         return ChallengeHandle(descriptor, record, nonce, position, instruction, book.response[0])
 
     def open_leaf(self, descriptor: bytes, challenger: Pubkey | str | bytes | bytearray, *, position: int,
                   segment: int, local: int, leaf: bytes, path: Sequence[bytes], spp1: bytes,
-                  response_length: int, nonce: int) -> ChallengeHandle:
+                  nonce: int) -> ChallengeHandle:
         who = c.key_bytes(challenger)
         book = self.book(descriptor, challenger=who, nonce=nonce)
         record = book.challenge[0]
-        data = c.encode_challenge_leaf(descriptor, position, segment, local, leaf, path, spp1, response_length, nonce)
+        data = c.encode_challenge_leaf(descriptor, position, segment, local, leaf, path, spp1, nonce)
         instruction = ix.challenge_leaf(self.accounts.dcg_program, record, who, book.document[0], book.positions[0],
                                         self.accounts.pt2s, self.accounts.routes, self.accounts.geometry,
                                         self.accounts.registry, self.accounts.pt1s, data)
@@ -129,12 +128,22 @@ class Watcher:
 
     def settle(self, handle: ChallengeHandle, winner: Pubkey | str | bytes | bytearray,
                challenger: Pubkey | str | bytes | bytearray,
-               executor: Pubkey | str | bytes | bytearray | None = None) -> Instruction:
+               executor: Pubkey | str | bytes | bytearray | None = None,
+               settlement_program: Pubkey | str | bytes | bytearray | None = None,
+               result: Pubkey | str | bytes | bytearray | None = None,
+               system_program: Pubkey | str | bytes | bytearray = c.SYSTEM_PROGRAM) -> Instruction:
         response = handle.response or c.pda(self.accounts.dcg_program, c.RESPONSE_SEED, handle.record)[0]
-        executor = self.read_challenge(handle.record)["executor"] if executor is None else executor
+        state = self.read_challenge(handle.record) if executor is None or settlement_program is not None else None
+        executor = state["executor"] if executor is None else executor
         book = self.book(handle.descriptor)
+        if settlement_program is None:
+            return ix.settle(self.accounts.dcg_program, handle.record, response, winner, executor,
+                             book.document[0], challenger)
+        escrow = c.settlement_escrow_address(self.accounts.dcg_program, handle.record)[0]
+        result_key = book.result[0] if result is None else result
         return ix.settle(self.accounts.dcg_program, handle.record, response, winner, executor,
-                         book.document[0], challenger)
+                         book.document[0], challenger, settlement_program=settlement_program,
+                         escrow=escrow, result=result_key, system_program=system_program)
 
     def _fixpoint_accounts(self) -> list[tuple[bytes, bool, bool]]:
         return [(self.accounts.pt2s, False, False), (self.accounts.routes, False, False),
@@ -149,7 +158,8 @@ class Watcher:
         for round_ in rounds:
             fixpoint = self._fixpoint_accounts() if round_.fixpoint else None
             result.append(ix.reveal_descent(self.accounts.dcg_program, handle.record, executor, book.document[0],
-                                            round_.descendants, round_.tree_root, fixpoint_accounts=fixpoint))
+                                            round_.descendants, round_.tree_root, fixpoint_accounts=fixpoint,
+                                            document_writable=round_.fixpoint))
             result.append(ix.descend(self.accounts.dcg_program, handle.record, challenger, book.document[0],
                                      round_.choice, fixpoint_accounts=fixpoint, document_writable=round_.fixpoint))
         return tuple(result)

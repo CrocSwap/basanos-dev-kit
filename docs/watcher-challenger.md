@@ -2,7 +2,7 @@
 
 A watcher checks a DCG document. A challenger opens a dispute when its independent result differs from the executor's commitment.
 
-This guide follows **DCG unified document format v1, specification revision 6**. It is a testnet alpha. The current independent runner is reproducible on macOS only.
+This guide follows **DCG unified document format v1, specification revision 7**. It is a mainnet alpha. The current independent runner is reproducible on macOS only.
 
 The normative specification (spec: to be published) defines why these checks are sound. This page gives the operational steps.
 
@@ -15,7 +15,7 @@ From the descriptor, derive:
 - `DCM2` document account;
 - `DPR2` position account;
 - `DFS2` family-slot account;
-- `DCR2` durable result;
+- `DCR2` retained DCR2 v5 result until a DCRZ tombstone replaces it;
 - any `DCR1` challenge account from its descriptor, challenger, and nonce.
 
 The exact seed strings are in the generated [reference](reference.md).
@@ -24,12 +24,12 @@ Watch:
 
 | Account | Fields to read |
 |---|---|
-| `DCM2` | flags, `positions_complete`, `document_root`, `open_challenges`, `challenger_wins`, finalization and dispute slots |
+| `DCM2` | flags, `positions_complete`, `document_root`, `open_challenges`, `challenger_wins`, DDT2, finalization and dispute slots |
 | `DPR2` | each landed position root |
-| `DCR2` | status, closed flag, request binding, output count, attested count, outputs, deadlines |
-| `DCR1` | phase, winner, deadline, fixed position or family, and the current round |
+| `DCR2` | account form, and for DCR2 v5 its status, `document_closed`, request binding, output count, attested count, outputs, deadlines, and retention fields |
+| `DCR1` | phase, winner, deadline, fixed position or family, the current round, and any custom-settlement deadline and ruling cause |
 
-Use account state as the source of truth. DLE1 logs are an index. Ignore events from failed transactions and recover missing events from accounts.
+Use account state as the source of truth. DLE1 version 2 logs are an index. Ignore events from failed transactions and recover missing events from accounts.
 
 ## 2. Recompute independently
 
@@ -47,7 +47,7 @@ Compare in this order:
 1. all DPR2 position roots;
 2. the family roots published in the finalization transaction;
 3. the output values proven into DPR2;
-4. the request binding and DDT1 in DCR2.
+4. the request binding and DDT2 in DCR2.
 
 Save the first differing position and the first differing summary leaf for each family. The first difference helps choose the right challenge path.
 
@@ -61,7 +61,7 @@ dispute_deadline = finalize_slot + challenge_window_slots
 
 The program requires `now <= dispute_deadline` for an opening instruction. A challenge already open may continue after the opening deadline.
 
-Budget the chosen challenger bond. The program transfers it into the new DCR1 record when the bond is nonzero. Record rent is also paid by the challenger. A pre-funded record address is allowed in revision 6.
+Budget the chosen challenger bond. The program transfers it into the new DCR1 record when the bond is nonzero. Record rent is also paid by the challenger. A pre-funded record address is allowed in revision 7.
 
 Each later phase change creates a new deadline:
 
@@ -102,7 +102,7 @@ It uses:
 - system program;
 - `PT2S`, base routes, base geometry, and `DRP2`.
 
-It creates a DCR1 PDA in phase 7. The position must be below `P`. The response length must be from 1 through 1 MiB, but the executor's later DRU1 length governs an honest response.
+It creates a DCR1 PDA in phase 7. The position must be below `P`. Tags 166 and 167 do not carry a response length. The executor declares the response size later with tag 115, and that stored DRU1 length governs the response.
 
 The challenger must not wait for this step. The executor must reveal the position's segment roots before the phase-7 deadline.
 
@@ -210,15 +210,23 @@ Do this after the ruling event and before tag 131. It returns the DRU1 rent to t
 
 ### Settle
 
-Tag **131, `Settle`** uses:
+Tag **131, `Settle`** selects the built-in or custom route from DDT2. It always pays the record bond to the ruling winner.
 
-- DCR1 (writable);
-- ruling winner (writable);
-- `DCM2` (writable);
-- incinerator (writable);
-- record challenger (writable).
+With a zero `settlement_program`, the built-in route uses exactly seven accounts, in order:
 
-Read the winner from DCR1. Settle pays the challenger bond to the winner. On the first settled challenger win, it also pays the configured executor-bond reward and burns the rest. It then closes the record and returns its remaining rent to the record challenger.
+1. DCR1 (writable);
+2. the derived DRU1 PDA (writable);
+3. ruling winner (writable);
+4. record executor (writable);
+5. `DCM2` (writable);
+6. incinerator (writable);
+7. record challenger (writable).
+
+On the first settled challenger win, the winner receives `floor(executor-bond pot × executor_reward_bps / 10,000)`, the loser receives zero, and the incinerator receives the exact remainder. Later challenger wins receive only their record bond. Settle drains a live DRU1 to the executor and returns the closed DCR1 account's remaining rent to the record challenger.
+
+A nonzero program uses the same seven accounts plus the settlement program (executable, read-only), the escrow PDA `"dcg-hcl-settlement" | challenge` (writable), DCR2 v5 (read-only), and system program (read-only). That is the exact eleven-account custom list. Settle makes the BSS1 CPI. The callback must pay the entire escrow and cannot reduce the winner, loser, or incinerator below their starting balances; its code chooses the allocation. Our untrusted example settlement program splits the pot equally between winner and loser, with the odd lamport going to the winner.
+
+After a challenger ruling, DCR1 bytes 170..178 hold `custom_settlement_deadline`, and byte 178 holds the ruling cause. The deadline is zero for a zero program or an executor win. Before the deadline, settle attempts only the custom route. A failed CPI rolls back atomically. At or after the deadline, settle uses the built-in payout as a fallback and still requires all eleven accounts. A program key, account-list, escrow, or postcondition mismatch returns 798, including a seven-account call for a nonzero program or an eleven-account call for a zero program. DLE1 version 2 records the built-in, custom, or fallback route; a settle that moves no pot records built-in.
 
 ### Resolve
 
@@ -226,7 +234,9 @@ After all challenges settle, anyone may send tag **178, `ResolveResultV5`** when
 
 ### Close
 
-After the deadline with no open challenge, anyone may send tag **172, `CloseDocumentV5`**. It returns document rent to the executor. It does not delete DCR2.
+After the deadline with no open challenge, anyone may send tag **172, `CloseDocumentV5`**. It returns all working-account lamports and any held executor bond to the executor. It starts result retention by setting DCR2's start slot to the current slot and its deadline to `start + result_retention_slots`. It does not immediately delete DCR2 v5.
+
+At or after that deadline, anyone may send tag **185, `CloseResultV6`**. It replaces DCR2 v5 with a 96-byte DCRZ tombstone, destroys the outputs and bitmap, and returns every lamport above the tombstone's rent-exempt minimum to the executor. Nothing does this automatically. Consumers must reject DCRZ.
 
 ## Common failures
 
@@ -247,6 +257,7 @@ After the deadline with no open challenge, anyone may send tag **172, `CloseDocu
 | 795 | An output proof does not reach the landed root. |
 | 796 | The result is not ready to resolve or close. |
 | 797 | A summary slot proof names the wrong producer write. |
+| 798 | The settlement program, account list, escrow, or payout postcondition does not match. |
 
 A refusal does not change state. Rebuild the transaction from the current account values before retrying.
 

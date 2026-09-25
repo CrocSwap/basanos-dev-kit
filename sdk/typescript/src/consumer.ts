@@ -3,7 +3,7 @@ import * as c from "./consensus.js";
 import { RpcClient } from "./transport.js";
 
 export interface ConsumerView {
-  result: c.ResultV4;
+  result: c.ResultV5;
   events: ReadonlyArray<Record<string, c.Integer | Buffer | string>>;
 }
 
@@ -24,13 +24,14 @@ export class Consumer {
 
   result_address(descriptor: Uint8Array): PublicKey { return this.resultAddress(descriptor); }
 
-  async readResult(descriptor: Uint8Array): Promise<c.ResultV4> {
+  async readResult(descriptor: Uint8Array): Promise<c.ResultV5> {
     const account = await this.rpc.readAccount(this.resultAddress(descriptor));
     if (account === null) throw new Error("result account is absent");
-    return c.ResultV4.decode(account.data);
+    if (account.data.subarray(0, 4).equals(Buffer.from("DCRZ"))) throw new Error("result has been replaced by a DCRZ tombstone");
+    return c.ResultV5.decode(account.data);
   }
 
-  async read_result(descriptor: Uint8Array): Promise<c.ResultV4> { return this.readResult(descriptor); }
+  async read_result(descriptor: Uint8Array): Promise<c.ResultV5> { return this.readResult(descriptor); }
 
   async events(signature: string): Promise<Array<Record<string, c.Integer | Buffer | string>>> {
     return this.rpc.eventsFromLogs(signature, this.dcgProgram);
@@ -48,7 +49,7 @@ export class Consumer {
     return this.verifyOutput(data, options);
   }
 
-  tokens(result: c.ResultV4, options: { vocab: number }): number[] { return usableTokens(result, options); }
+  tokens(result: c.ResultV5, options: { vocab: number }): number[] { return usableTokens(result, options); }
 }
 
 export function decodeToken(value: Uint8Array, vocab: number): number {
@@ -71,7 +72,7 @@ export function tokenValue(token: number | bigint): Buffer {
 
 export const token_value = tokenValue;
 
-export function usableTokens(result: c.ResultV4, options: { vocab: number }): number[] {
+export function usableTokens(result: c.ResultV5, options: { vocab: number }): number[] {
   if (!c.USABLE_STATUSES.has(result.status) || result.documentRoot.length !== 32 || result.documentRoot.every((item) => item === 0)) throw new Error("result is not usable");
   if (result.outputs.length !== result.outputCount || result.outputsAttested !== result.outputCount) throw new Error(String(c.OUTPUT_PROOF));
   return result.outputs.map((value) => {

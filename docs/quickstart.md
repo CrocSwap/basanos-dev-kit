@@ -1,46 +1,58 @@
 # DCG builder quickstart
 
-This is the shortest testnet path from a request to a readable result. It follows **DCG unified document format v1, specification revision 6**.
+This is the shortest mainnet path from a request to a readable result. It follows **DCG unified document format v1, specification revision 7**.
 
-The program is not deployed yet. Every value in angle brackets is a placeholder. Replace it only after deployment.
+The SDKs are in the developer kit on GitHub: [CrocSwap/basanos-dev-kit](https://github.com/CrocSwap/basanos-dev-kit) (Python in `sdk/python`, TypeScript in `sdk/typescript`).
+
+The programs are deployed on Fogo mainnet (addresses below). Values in angle brackets are yours to fill in.
 
 ## Before you start
 
 You need:
 
-- a Fogo **testnet** RPC endpoint;
-- a funded testnet fee payer;
+- a Fogo **mainnet** RPC endpoint;
+- a fee payer funded with FOGO;
 - separate requester, executor, and challenger keys as needed;
 - an approved sealed plan (`PT2S`);
 - a frozen model registry (`DRP2`);
 - a complete class-admission record (`DEA2`);
 - a model, prompt, and output policy for one supported workload.
 
-Never use a mainnet endpoint. This alpha has no assets at stake.
+This is a mainnet alpha: transactions spend real FOGO. Amounts are small, but check every bond and window before you send.
 
-**Estimated:** a 10,000-token document takes the executor about an hour today (a Metal path may bring it to 30–60 minutes); results become final only after the dispute window, so plan for minutes to hours per request rather than seconds.
+**Estimated:** a 1,000-token document takes the executor a couple of minutes today. Results become final only after the dispute window, so plan for minutes to hours per request rather than seconds.
 
 Set the deployment values:
 
 ```sh
-export DCG_RPC_URL="<FOGO_TESTNET_RPC_URL>"
-export DCG_PROGRAM_ID="<RE_KEY_DCG_PROGRAM_ID>"
+export DCG_RPC_URL="<FOGO_MAINNET_RPC_URL>"
+export DCG_PROGRAM_ID="3cJfY4YM2TZooT9P9WchAYzofm2WoAnMfyK176Fjp9vo"
 export DCG_KEYPAIR_PATHS="<KEYPAIR_PATHS>"
 ```
 
-The deploy process must also provide these SDK entries:
+Mainnet alpha addresses:
+
+| Account | Address |
+|---|---|
+| DCG program | `3cJfY4YM2TZooT9P9WchAYzofm2WoAnMfyK176Fjp9vo` |
+| Tier C request program | `HdZX3FLaKhzXpoyhiwrHU6FKVtY1ySPRJcGR3GAxAfz2` |
+| Request program config | `CznmpMe31KrwDcomVoPCTDQhZJynr3h9cjtyxy3hTHjd` |
+| Model registry (`DRP2`, id 1, frozen) | `FPgbQ4hJWRWtsb3f9ob7LatMV6MQsvSVb1wVyEs87HKr` |
+
+The steps below use these SDK entries:
 
 | Placeholder | Purpose |
 |---|---|
 | `<CREATE_TIER_C_REQUEST>` | Create the request and return its request ID and consumer digest. |
-| `<BUILD_UNIFIED_INIT>` | Build the revision-6 `DDT1`, `DRB1`, descriptor, and instruction data. |
+| `<BUILD_UNIFIED_INIT>` | Build the revision-7 `DDT2`, `DRB1`, descriptor, and instruction data. |
 | `<LAND_POSITION_ROOTS>` | Encode batches of position roots. |
 | `<ATTEST_OUTPUTS>` | Build proof-carrying `AttestOutputV5` data. |
 | `<FINALIZE_DOCUMENT>` | Build `FinalizeDocumentV5` with the family roots. |
-| `<WATCH_DOCUMENT>` | Read DLE1 events and the v5 accounts. |
-| `<READ_RESULT>` | Decode a DCR2 v4 result. |
+| `<WATCH_DOCUMENT>` | Read DLE1 version 2 events and the v6 document and v5 result accounts. |
+| `<READ_RESULT>` | Decode a DCR2 v5 result and reject DCRZ. |
 | `<RESOLVE_RESULT>` | Build `ResolveResultV5`. |
 | `<CLOSE_DOCUMENT>` | Build `CloseDocumentV5`. |
+| `<CLOSE_RESULT>` | Build `CloseResultV6` for use at or after the retention deadline. |
 
 The exact package names and arguments will be filled in at deploy. Do not guess them from the old DCG examples.
 
@@ -54,16 +66,21 @@ The requester creates a Tier C request. It chooses:
 - the challenge window;
 - the response window;
 - the challenger bond;
-- the executor bond and challenger reward share;
+- the executor bond and built-in challenger reward share;
+- `settlement_program`, which is zero for the built-in route;
+- `custom_settle_window_slots`, which is zero exactly when `settlement_program` is zero;
+- `result_retention_slots`;
 - the request deadline.
 
-Zero is allowed for either bond. A zero executor bond is normal for this testnet trial. Window values remain placeholders until the requester and executor agree.
+Zero is allowed for either bond. A zero executor bond is normal for this alpha. A zero `settlement_program` requires a zero custom-settlement window. A nonzero program requires a custom window from 1 through `2^62` slots. Retention is also from 1 through `2^62` slots. These are negotiated run terms, so the requester and executor must agree on them.
+
+The mainnet alpha tooling uses a 45,000-slot challenge window (30 minutes at 40 ms slots), a 15,000-slot response window, a 1,000,000-lamport challenger bond, no executor bond, a 10,000-basis-point built-in winner share, the built-in settlement route and 64,800,000 slots (30 days) of result retention. The tool must set `result_retention_slots` explicitly from the requested duration. Mainnet configuration has no defaults and must name every term.
 
 The request output must include:
 
 - the request account address, used as `request_id`;
-- `consumer_digest = SHA256("basanos/tierc-request/1" || TRQ1)`;
-- the exact DDT1 bytes;
+- `consumer_digest = SHA256("basanos/tierc-request/2" || TRQ1)`;
+- the exact 376-byte TRQ1 and its DDT2 bytes;
 - the prompt commitment.
 
 Conceptually:
@@ -77,7 +94,7 @@ PYTHONPATH=.:src python -m "<CREATE_TIER_C_REQUEST_MODULE>" \
   --out "<REQUEST_RECEIPT>"
 ```
 
-Give the request ID, consumer digest, prompt commitment, output count, seed, and dispute terms to the executor. Do not send a private key.
+Give the request ID, consumer digest, prompt commitment, output count, seed, and DDT2 run terms to the executor. Do not send a private key.
 
 ## 2. Start the document
 
@@ -90,7 +107,7 @@ It builds a `DRB1` run binding with:
 - the agreed seed;
 - the output locator: the base entry, write row, first position, count, and width.
 
-Then it sends tag **161, `UnifiedInit`**. The program creates the document, position, family-table, and result accounts. The descriptor is the hash committed by that instruction.
+Then it sends tag **161, `UnifiedInit`**. The program creates the document, position, family-table, and DCR2 v5 result accounts. The descriptor is the hash of the revision-7 `/4` preimage committed by that instruction.
 
 The executor reads the emitted `INIT` event or the resulting accounts. The requester and watcher can now derive the same document addresses from the descriptor.
 
@@ -134,38 +151,44 @@ The requester, executor, and watcher should run `<WATCH_DOCUMENT>` until all of 
 - `DCM2.open_challenges == 0`;
 - if the document is not refuted, every output is attested.
 
-Use account state as the source of truth. DLE1 events are an index. A log can be missing after a failed transaction or the chain log cap.
+Use account state as the source of truth. DLE1 version 2 events are an index. A log can be missing after a failed transaction or the chain log cap.
 
 A challenger may open only before the opening deadline. A round already open may continue after it. Each phase change gets a new deadline of `now + response_window_slots`.
 
 If the result is still `PENDING` after the conditions hold, anyone may send tag **178, `ResolveResultV5`**. It returns `RESULT_STATE` while an output is missing, a challenge is open, or the deadline has not passed.
 
+After a challenge is ruled, tag **131, `Settle`** pays its record bond to the ruling winner. With a zero `settlement_program`, the built-in route uses seven accounts. On the first settled challenger win, it pays the configured share of the executor-bond pot to the winner and the exact remainder to the incinerator; the loser receives none. A nonzero program selects the eleven-account custom route and an exact BSS1 CPI before its deadline. The program must pay the entire escrow. At or after the deadline, DCG uses the built-in payout as a fallback with the eleven-account list. A route or escrow mismatch returns 798.
+
 ## 6. Read the result
 
-Decode the DCR2 v4 account with `<READ_RESULT>`.
+Decode the DCR2 v5 account with `<READ_RESULT>`. Reject a DCRZ tombstone instead of treating it as a result.
 
 Check all of these fields before use:
 
 | Field | Required value |
 |---|---|
-| `closed` | `1` is allowed. The record remains durable. |
+| `document_closed` | `0` or `1`; either is readable while the account remains DCR2 v5. |
 | `status` | `FINAL` or `SETTLED` |
 | `request_id` | Your request account |
 | `consumer_digest` | Your request digest |
 | `executor` | The expected executor |
 | `document_root` | Nonzero |
 | `outputs_attested` | `output_count` |
+| `retention_start_slot` | Zero before document close, then the close slot. |
+| `retention_deadline` | `retention_start_slot + retention_slots` after document close. |
 | `outputs` | Read exactly `output_count × output_width` bytes |
 
 For a Tier C result, decode each 16-byte output as two little-endian signed 64-bit values: `(token_id, logit)`. Check that the token ID is below the tokenizer vocabulary.
 
 Do not use a `PENDING` or `REFUTED` record.
 
-## 7. Close and reclaim document rent
+## 7. Close the document and start result retention
 
-After the result is usable, anyone may send tag **172, `CloseDocumentV5`**. The executor receives the document account rent and any held executor bond. The result account stays.
+After the result is usable, anyone may send tag **172, `CloseDocumentV5`**. The executor receives the working-account rent and any held executor bond. The call sets `retention_start_slot` to the current slot and `retention_deadline` to `retention_start_slot + retention_slots`. The DCR2 v5 result stays at its existing address.
 
 A refuted document may also close. An unfinalized document may close only when the executor abandons it.
+
+Nothing closes the retained result automatically. At or after `retention_deadline`, anyone may send tag **185, `CloseResultV6`**. It replaces DCR2 v5 with a 96-byte DCRZ tombstone, destroys the outputs and bitmap, and sends every lamport above the tombstone's rent-exempt minimum to the executor. Before the deadline it refuses. A consumer must reject DCRZ.
 
 ## Troubleshooting
 

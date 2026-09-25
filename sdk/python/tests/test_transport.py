@@ -58,7 +58,7 @@ def test_account_and_log_decoding() -> None:
     client, fake = rpc([
         {"jsonrpc": "2.0", "id": 1, "result": {"data": [encoded, "base64"], "owner": address, "lamports": 7}},
         {"jsonrpc": "2.0", "id": 2, "result": {"meta": {"logMessages": [
-            f"Program {address} invoke [1]", "Program data: " + base64.b64encode(c.encode_event(
+            f"Program {address} invoke [1]", "Program data: " + base64.b64encode(c.encode_event_v7(
                 "resolve", descriptor=bytes(32), slot=9, status=1, challenger_wins=0, outputs_attested=0)).decode(),
         ]}}},
     ])
@@ -70,7 +70,7 @@ def test_account_and_log_decoding() -> None:
 
 def test_events_from_failed_transaction_are_ignored() -> None:
     address = "11111111111111111111111111111111"
-    event = base64.b64encode(c.encode_event(
+    event = base64.b64encode(c.encode_event_v7(
         "resolve", descriptor=bytes(32), slot=9, status=1, challenger_wins=0, outputs_attested=0)).decode()
     client, _fake = rpc([{"jsonrpc": "2.0", "id": 1, "result": {"meta": {"err": {"InstructionError": "x"},
                                                                          "logMessages": [

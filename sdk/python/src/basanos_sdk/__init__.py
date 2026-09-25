@@ -9,14 +9,25 @@ from . import (
     transport,
     watcher,
 )
-from .addresses import AddressBook, addresses, b58, derive_addresses, pda
+from .addresses import AddressBook, addresses, b58, derive_addresses, pda, settlement_escrow_address
+from .consensus import (
+    Dcm2V6,
+    DescriptorSpec,
+    DescriptorSpecV7,
+    ResultTombstone,
+    ResultV5,
+    RunTerms,
+)
 from .consumer import Consumer, ConsumerView, decode_token, token_value, usable_tokens
 from .requester import (
     DocumentAccounts,
     DocumentPlan,
     Request,
     RequestBlock,
+    RequestBlockV6,
+    RequestBlockV7,
     Requester,
+    run_binding_for_v7,
     prompt_tokens_sha256,
     request_address,
 )
@@ -35,6 +46,12 @@ from .watcher import ChallengeHandle, DescentRound, Watcher, WatcherAccounts
 __all__ = [
     "Account",
     "AddressBook",
+    "Dcm2V6",
+    "DescriptorSpec",
+    "DescriptorSpecV7",
+    "ResultTombstone",
+    "ResultV5",
+    "RunTerms",
     "ChallengeHandle",
     "Confirmation",
     "Consumer",
@@ -44,6 +61,8 @@ __all__ = [
     "DocumentPlan",
     "Request",
     "RequestBlock",
+    "RequestBlockV6",
+    "RequestBlockV7",
     "Requester",
     "RpcBodyTooLarge",
     "RpcClient",
@@ -60,6 +79,8 @@ __all__ = [
     "instructions",
     "load_keypair",
     "pda",
+    "run_binding_for_v7",
+    "settlement_escrow_address",
     "prompt_tokens_sha256",
     "request_address",
     "requester",

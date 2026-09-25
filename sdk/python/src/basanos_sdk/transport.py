@@ -291,17 +291,22 @@ class RpcClient:
         meta = (value.get("meta") or {}).get("logMessages") or []
         events = []
         program_text = str(consensus.key(program)) if program is not None else None
-        current_program = None
+        stack: list[str] = []
         for line in (str(item) for item in meta):
             if line.startswith("Program ") and " invoke [" in line:
-                current_program = line.split()[1]
+                stack.append(line.split()[1])
+            elif line.startswith("Program ") and (" success" in line or " failed:" in line):
+                if stack:
+                    stack.pop()
             if "Program data:" not in line:
                 continue
-            _prefix, encoded = line.split("Program data:", 1)
+            current_program = stack[-1] if stack else None
             if program_text is not None and current_program != program_text:
                 continue
+            _prefix, encoded = line.split("Program data:", 1)
             try:
-                events.append(consensus.decode_event(base64.b64decode(encoded.strip(), validate=True)))
+                raw = base64.b64decode(encoded.strip(), validate=True)
+                events.append(consensus.decode_event_any(raw))
             except (ValueError, TypeError):
                 continue
         return events

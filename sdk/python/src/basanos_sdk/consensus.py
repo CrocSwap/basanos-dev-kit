@@ -14,7 +14,9 @@ from typing import Any
 
 from solders.pubkey import Pubkey
 
-SPEC_REVISION = 6
+SPEC_REVISION = 7
+DESCRIPTOR_DOMAIN_V7 = b"basanos/dcg-unified-descriptor/4"
+UNIFIED_VERSION_V7 = 2
 SYSTEM_PROGRAM = Pubkey.from_string("11111111111111111111111111111111")
 COMPUTE_BUDGET_PROGRAM = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
 UPGRADEABLE_LOADER = Pubkey.from_string("BPFLoaderUpgradeab1e11111111111111111111111")
@@ -43,6 +45,9 @@ UNIFIED_VERSION = 1
 STORAGE_ROOT_ONLY = 1
 COMMITMENT_VERSION = 3
 MACHINE_NAME = b"basanos/qwen35-4b-a16/1"
+#: Spec revision 7: the V7 machine a 105-byte RegistryCreateV2 may name.
+MACHINE_NAME_V7 = b"basanos/qwen35-4b-a16/2"
+ACCEPTED_MACHINES = (MACHINE_NAME, MACHINE_NAME_V7)
 MAX_FAMILIES = 24
 MAX_SEGMENTS = 128
 MAX_RS1_HEIGHT = 19
@@ -72,11 +77,12 @@ TEMPLATE_SEAL = 793
 RUN_BINDING = 794
 OUTPUT_PROOF = 795
 RESULT_STATE = 796
-SUMMARY_PRODUCER = 797
 CL_MALFORMED, CL_COORDINATE, CL_AUTHORITY, CL_ROOT = 580, 581, 582, 583
 CL_MISSING, CL_AFTER_FINAL = 591, 592
 CL_OVERFLOW, CL_CLOSE = 598, 599
-DCR1_BAD, DCR1_AUTH, DCR1_PHASE, DCR1_PROOF, DCR1_DEADLINE = 730, 731, 733, 734, 736
+DCR1_BAD, DCR1_AUTH, DCR1_PHASE, DCR1_PROOF, DCR1_DEADLINE, DCR1_INCOMPLETE = 730, 731, 733, 734, 736, 741
+SUMMARY_PRODUCER = 797
+SETTLEMENT_PROGRAM = 798
 
 TAGS = {
     156: "RegistryCreateV2",
@@ -106,6 +112,7 @@ TAGS = {
     180: "SelectSummaryV5",
     181: "AnswerSummaryV5",
     182: "CloseResponseV5",
+    185: "CloseResultV6",
 }
 TAG_REGISTRY_CREATE = 156
 TAG_REGISTRY_WRITE = 157
@@ -134,6 +141,10 @@ TAG_REVEAL_SUMMARY = 179
 TAG_SELECT_SUMMARY = 180
 TAG_ANSWER_SUMMARY = 181
 TAG_CLOSE_RESPONSE = 182
+TAG_CLOSE_RESULT = 185
+SETTLEMENT_ESCROW_SEED = b"dcg-hcl-settlement"
+CAUSE_VERDICT, CAUSE_CONVICT, CAUSE_TIMEOUT = 1, 2, 3
+ROUTE_BUILT_IN, ROUTE_CUSTOM, ROUTE_FALLBACK = 1, 2, 3
 
 DCM2_V5_HEADER = 2_024
 DCM2_TERMS_AT = 1_816
@@ -153,6 +164,7 @@ FLAG_ARMED, FLAG_FINAL, FLAG_REFUTED, FLAG_CLOSED, FLAG_ROOT_ONLY, FLAG_SEALED =
 BOND_NONE, BOND_HELD, BOND_PAID, BOND_RETURNED = 0, 1, 2, 3
 PHASE_RESPOND, PHASE_SEALED, PHASE_RULED, PHASE_SETTLED = 1, 2, 3, 4
 PHASE_REVEAL, PHASE_DESCEND, PHASE_POSITION_REVEAL, PHASE_SELECT = 5, 6, 7, 8
+PHASE_SUMMARY_REVEAL, PHASE_SUMMARY_DESCEND, PHASE_SUMMARY_ANSWER = 9, 10, 11
 WINNER_EXECUTOR, WINNER_CHALLENGER = 1, 2
 EVENT_MAGIC = b"DLE1"
 EVENT_VERSION = 1
@@ -177,6 +189,15 @@ EVENT_SCHEMA = {
     10: ("resolve", [("status", 1), (None, 3), ("challenger_wins", 4), ("outputs_attested", 4), (None, 4)]),
 }
 EVENT_KINDS = {name: kind for kind, (name, _) in EVENT_SCHEMA.items()}
+EVENT_VERSION_V7 = 2
+EVENT_SCHEMA_V7 = {
+    **EVENT_SCHEMA,
+    7: ("settle", [("challenge", 32), ("winner", 32), ("record_bond_paid", 8), ("settlement_pot", 8),
+                    ("winner_payout", 8), ("loser_payout", 8), ("burn_payout", 8), ("route", 1), (None, 7)]),
+    11: ("close_result", [("executor", 32), ("refund", 8), ("retention_start_slot", 8),
+                           ("retention_deadline", 8), ("closed_slot", 8), (None, 4)]),
+}
+EVENT_KINDS_V7 = {name: kind for kind, (name, _) in EVENT_SCHEMA_V7.items()}
 
 
 class Refusal(ValueError):
@@ -246,10 +267,11 @@ class AddressBook:
     result: tuple[bytes, int] | None = None
     challenge: tuple[bytes, int] | None = None
     response: tuple[bytes, int] | None = None
+    settlement_escrow: tuple[bytes, int] | None = None
 
     def as_dict(self) -> dict[str, tuple[bytes, int]]:
         out = {"config": self.config, "programdata": self.programdata}
-        for name in ("registry", "template_seal", "admission", "document", "positions", "family_slots", "result", "challenge", "response"):
+        for name in ("registry", "template_seal", "admission", "document", "positions", "family_slots", "result", "challenge", "response", "settlement_escrow"):
             value = getattr(self, name)
             if value is not None:
                 out[name] = value
@@ -266,7 +288,7 @@ def addresses(program: Pubkey | str | bytes | bytearray, *, descriptor: bytes | 
               pt2s: bytes | None = None, pt2s_sha256: bytes | None = None,
               challenger: Pubkey | str | bytes | bytearray | None = None, nonce: int = 0,
               registry_id: int | None = None, registry: bytes | None = None,
-              position_count: int | None = None) -> AddressBook:
+              position_count: int | None = None, settlement: bool = False) -> AddressBook:
     """Derive every DCG account address from public inputs."""
     program_key = key_bytes(program)
     out = AddressBook(program_key, pda(program_key, CONFIG_SEED), pda(UPGRADEABLE_LOADER, program_key))
@@ -286,10 +308,16 @@ def addresses(program: Pubkey | str | bytes | bytearray, *, descriptor: bytes | 
         if challenger is not None:
             values["challenge"] = pda(program_key, CHALLENGE_SEED, descriptor, key_bytes(challenger), uint(nonce, 4))
             values["response"] = pda(program_key, RESPONSE_SEED, values["challenge"][0])
+            if settlement:
+                values["settlement_escrow"] = pda(program_key, SETTLEMENT_ESCROW_SEED, values["challenge"][0])
     return AddressBook(program_key, values["config"], values["programdata"], values.get("registry"),
                        values.get("template_seal"), values.get("admission"), values.get("document"),
                        values.get("positions"), values.get("family_slots"), values.get("result"),
-                       values.get("challenge"), values.get("response"))
+                       values.get("challenge"), values.get("response"), values.get("settlement_escrow"))
+
+
+def settlement_escrow_address(program: Pubkey | str | bytes | bytearray, challenge: bytes) -> tuple[bytes, int]:
+    return pda(program, SETTLEMENT_ESCROW_SEED, digest(challenge, "challenge"))
 
 
 derive_addresses = addresses
@@ -339,6 +367,84 @@ def check_dispute_terms(terms: DisputeTerms, round_floor_slots: int = 1) -> int:
     return 0
 
 
+RUN_TERMS_BYTES = 96
+RUN_TERMS_VERSION = 1
+
+
+@dataclass(frozen=True)
+class RunTerms:
+    challenge_window_slots: int
+    response_window_slots: int
+    challenger_bond_lamports: int
+    executor_bond_lamports: int
+    executor_reward_bps: int
+    settlement_program: bytes
+    custom_settle_window_slots: int
+    result_retention_slots: int
+
+    def encode(self) -> bytes:
+        if check_run_terms(self) != 0:
+            raise Refusal(DISPUTE_TERMS)
+        out = (b"DDT2" + uint(RUN_TERMS_VERSION, 2) + bytes(2) + uint(self.challenge_window_slots, 8)
+               + uint(self.response_window_slots, 8) + uint(self.challenger_bond_lamports, 8)
+               + uint(self.executor_bond_lamports, 8) + uint(self.executor_reward_bps, 2) + bytes(6)
+               + digest(self.settlement_program, "settlement program") + uint(self.custom_settle_window_slots, 8)
+               + uint(self.result_retention_slots, 8))
+        if len(out) != RUN_TERMS_BYTES:
+            raise AssertionError("run terms length")
+        return out
+
+    @classmethod
+    def decode(cls, raw: bytes) -> RunTerms:
+        raw = bytes(raw)
+        if (len(raw) != RUN_TERMS_BYTES or raw[:4] != b"DDT2" or raw[4:6] != uint(RUN_TERMS_VERSION, 2)
+                or raw[6:8] != bytes(2) or raw[42:48] != bytes(6)):
+            raise Refusal(DISPUTE_TERMS)
+        result = cls(int.from_bytes(raw[8:16], "little"), int.from_bytes(raw[16:24], "little"),
+                     int.from_bytes(raw[24:32], "little"), int.from_bytes(raw[32:40], "little"),
+                     int.from_bytes(raw[40:42], "little"), raw[48:80],
+                     int.from_bytes(raw[80:88], "little"), int.from_bytes(raw[88:96], "little"))
+        if check_run_terms(result) != 0:
+            raise Refusal(DISPUTE_TERMS)
+        return result
+
+
+def check_run_terms(terms: RunTerms, round_floor_slots: int = 1) -> int:
+    if round_floor_slots < 1:
+        raise ValueError("round floor")
+    program = bytes(terms.settlement_program)
+    valid = (1 <= terms.challenge_window_slots <= WINDOW_CAP
+             and round_floor_slots <= terms.response_window_slots <= WINDOW_CAP
+             and 0 <= terms.challenger_bond_lamports < 1 << 64
+             and 0 <= terms.executor_bond_lamports < 1 << 64
+             and 0 <= terms.executor_reward_bps <= BPS_DENOMINATOR
+             and len(program) == 32
+             and ((program == bytes(32)) == (terms.custom_settle_window_slots == 0))
+             and (program == bytes(32) or 1 <= terms.custom_settle_window_slots <= WINDOW_CAP)
+             and 1 <= terms.result_retention_slots <= WINDOW_CAP)
+    return 0 if valid else DISPUTE_TERMS
+
+
+def built_in_settlement(terms: RunTerms) -> tuple[int, int]:
+    reward = terms.executor_bond_lamports * terms.executor_reward_bps // BPS_DENOMINATOR
+    return reward, terms.executor_bond_lamports - reward
+
+
+def encode_settlement_instruction(*, ruling: int, cause: int, winner: bytes, loser: bytes,
+                                  challenge: bytes, result: bytes, descriptor: bytes,
+                                  settlement_pot: int, challenger_bond: int,
+                                  built_in_winner_amount: int, built_in_burn_amount: int) -> bytes:
+    if ruling != WINNER_CHALLENGER or cause not in (CAUSE_VERDICT, CAUSE_CONVICT, CAUSE_TIMEOUT):
+        raise Refusal(SETTLEMENT_PROGRAM)
+    out = (b"BSS1" + uint(1, 2) + uint(ruling, 1) + uint(cause, 1) + digest(winner, "winner")
+           + digest(loser, "loser") + digest(challenge, "challenge") + digest(result, "result")
+           + digest(descriptor, "descriptor") + uint(settlement_pot, 8) + uint(challenger_bond, 8)
+           + uint(built_in_winner_amount, 8) + uint(built_in_burn_amount, 8))
+    if len(out) != 200:
+        raise AssertionError("BSS1 length")
+    return out
+
+
 @dataclass(frozen=True)
 class RunBinding:
     executor: bytes
@@ -381,15 +487,16 @@ def result_bytes(output_count: int, output_width: int) -> int:
 
 
 def check_run_binding(binding: RunBinding, *, position_count: int | None = None,
-                      signer: bytes | None = None) -> int:
+                      signer: bytes | None = None, result_size: int | None = None) -> int:
     zero = bytes(32)
+    size = result_size if result_size is not None else result_bytes(binding.output_count, binding.output_width)
     valid = (len(binding.executor) == len(binding.request_id) == len(binding.consumer_digest) == len(binding.seed) == 32
              and binding.executor != zero
              and (binding.request_id == zero) == (binding.consumer_digest == zero)
              and binding.output_count >= 1 and 1 <= binding.output_width <= MAX_OUTPUT_WIDTH
              and 0 <= binding.output_write < 256 and 0 <= binding.output_base_entry < 1 << 32
              and 0 <= binding.output_first_position < 1 << 32 and binding.output_count < 1 << 32
-             and result_bytes(binding.output_count, binding.output_width) <= MAX_ACCOUNT_BYTES)
+             and size <= MAX_ACCOUNT_BYTES)
     if valid and position_count is not None:
         valid = binding.output_first_position + binding.output_count <= position_count
     if valid and signer is not None:
@@ -487,6 +594,253 @@ class ResultV4:
         if int.from_bytes(raw[204:208], "little") != result.outputs_attested:
             raise Refusal(RESULT_STATE)
         return result
+
+
+RESULT_V5_VERSION = 5
+RESULT_V5_HEADER = 336
+RESULT_V5_TERMS_AT = 216
+RESULT_TOMBSTONE_BYTES = 96
+RETENTION_SLOTS_AT, RETENTION_START_AT, RETENTION_DEADLINE_AT = 312, 320, 328
+CUSTOM_SETTLEMENT_DEADLINE_AT, RULING_CAUSE_AT = 170, 178
+
+
+def result_v5_bytes(output_count: int, output_width: int) -> int:
+    return RESULT_V5_HEADER + output_count * output_width + (output_count + 7) // 8
+
+
+def check_run_binding_v7(binding: RunBinding, *, position_count: int | None = None,
+                        signer: bytes | None = None) -> int:
+    return check_run_binding(binding, position_count=position_count, signer=signer,
+                             result_size=result_v5_bytes(binding.output_count, binding.output_width))
+
+
+@dataclass
+class ResultV5:
+    descriptor: bytes
+    executor: bytes
+    request_id: bytes
+    consumer_digest: bytes
+    terms: RunTerms
+    output_first_position: int
+    output_count: int
+    output_width: int
+    status: int = STATUS_PENDING
+    document_closed: int = 0
+    document_root: bytes = bytes(32)
+    finalize_slot: int = 0
+    dispute_deadline: int = 0
+    status_slot: int = 0
+    challenger_wins: int = 0
+    retention_start_slot: int = 0
+    retention_deadline: int = 0
+    outputs: list[bytes | None] | None = None
+
+    def __post_init__(self) -> None:
+        if self.outputs is None:
+            self.outputs = [None] * self.output_count
+
+    @classmethod
+    def at_init(cls, descriptor: bytes, binding: RunBinding, terms: RunTerms) -> ResultV5:
+        return cls(descriptor, binding.executor, binding.request_id, binding.consumer_digest, terms,
+                   binding.output_first_position, binding.output_count, binding.output_width)
+
+    @property
+    def closed(self) -> int:
+        return self.document_closed
+
+    @property
+    def retention_slots(self) -> int:
+        return self.terms.result_retention_slots
+
+    @property
+    def outputs_attested(self) -> int:
+        return sum(value is not None for value in (self.outputs or ()))
+
+    @property
+    def usable(self) -> bool:
+        return self.status in USABLE_STATUSES and self.document_root != bytes(32) and self.outputs_attested == self.output_count
+
+    def encode(self) -> bytes:
+        if (self.status not in (STATUS_PENDING, STATUS_FINAL, STATUS_REFUTED, STATUS_SETTLED)
+                or self.document_closed not in (0, 1) or self.outputs is None
+                or len(self.outputs) != self.output_count or not 1 <= self.output_width <= MAX_OUTPUT_WIDTH
+                or (self.retention_start_slot == 0 and self.retention_deadline != 0)
+                or (self.retention_start_slot != 0 and self.retention_deadline != self.retention_start_slot + self.retention_slots)):
+            raise Refusal(RESULT_STATE)
+        out = bytearray(b"DCR2" + uint(RESULT_V5_VERSION, 2) + uint(self.status, 1) + uint(self.document_closed, 1)
+                        + digest(self.descriptor) + digest(self.document_root) + digest(self.request_id)
+                        + digest(self.consumer_digest) + digest(self.executor) + uint(self.finalize_slot, 8)
+                        + uint(self.dispute_deadline, 8) + uint(self.status_slot, 8) + uint(self.challenger_wins, 4)
+                        + uint(self.output_count, 4) + uint(self.output_first_position, 4)
+                        + uint(self.outputs_attested, 4) + uint(self.output_width, 1) + bytes(7)
+                        + self.terms.encode() + uint(self.retention_slots, 8)
+                        + uint(self.retention_start_slot, 8) + uint(self.retention_deadline, 8))
+        if len(out) != RESULT_V5_HEADER:
+            raise AssertionError("DCR2 v5 header")
+        bitmap = bytearray((self.output_count + 7) // 8)
+        for index, value in enumerate(self.outputs):
+            if value is None:
+                out += bytes(self.output_width)
+            else:
+                if len(value) != self.output_width:
+                    raise Refusal(RESULT_STATE)
+                out += value
+                bitmap[index // 8] |= 1 << (index % 8)
+        encoded = bytes(out + bitmap)
+        if len(encoded) > MAX_ACCOUNT_BYTES:
+            raise Refusal(RESULT_STATE)
+        return encoded
+
+    @classmethod
+    def decode(cls, raw: bytes) -> ResultV5:
+        raw = bytes(raw)
+        if len(raw) < RESULT_V5_HEADER or raw[:4] != b"DCR2" or raw[4:6] != uint(RESULT_V5_VERSION, 2):
+            raise Refusal(RESULT_STATE)
+        count, width = int.from_bytes(raw[196:200], "little"), raw[208]
+        if (raw[6] > STATUS_SETTLED or raw[7] > 1 or raw[209:216] != bytes(7)
+                or not 1 <= width <= MAX_OUTPUT_WIDTH or len(raw) != result_v5_bytes(count, width)
+                or len(raw) > MAX_ACCOUNT_BYTES):
+            raise Refusal(RESULT_STATE)
+        terms = RunTerms.decode(raw[RESULT_V5_TERMS_AT:RESULT_V5_TERMS_AT + RUN_TERMS_BYTES])
+        if int.from_bytes(raw[312:320], "little") != terms.result_retention_slots:
+            raise Refusal(RESULT_STATE)
+        bitmap_at = RESULT_V5_HEADER + count * width
+        bitmap = raw[bitmap_at:]
+        if count % 8 and bitmap[-1] >> (count % 8):
+            raise Refusal(RESULT_STATE)
+        outputs: list[bytes | None] = []
+        for index in range(count):
+            value = raw[RESULT_V5_HEADER + index * width:RESULT_V5_HEADER + (index + 1) * width]
+            present = bitmap[index // 8] >> (index % 8) & 1
+            if not present and value != bytes(width):
+                raise Refusal(RESULT_STATE)
+            outputs.append(value if present else None)
+        result = cls(raw[8:40], raw[136:168], raw[72:104], raw[104:136], terms,
+                     int.from_bytes(raw[200:204], "little"), count, width, raw[6], raw[7], raw[40:72],
+                     int.from_bytes(raw[168:176], "little"), int.from_bytes(raw[176:184], "little"),
+                     int.from_bytes(raw[184:192], "little"), int.from_bytes(raw[192:196], "little"),
+                     int.from_bytes(raw[320:328], "little"), int.from_bytes(raw[328:336], "little"), outputs)
+        if int.from_bytes(raw[204:208], "little") != result.outputs_attested:
+            raise Refusal(RESULT_STATE)
+        if result.retention_start_slot == 0:
+            if result.retention_deadline != 0:
+                raise Refusal(RESULT_STATE)
+        elif result.retention_deadline != result.retention_start_slot + result.retention_slots:
+            raise Refusal(RESULT_STATE)
+        return result
+
+
+@dataclass(frozen=True)
+class ResultTombstone:
+    descriptor: bytes
+    executor: bytes
+    retention_start_slot: int
+    retention_deadline: int
+    closed_slot: int
+
+    def encode(self) -> bytes:
+        out = (b"DCRZ" + uint(1, 2) + bytes(2) + digest(self.descriptor, "descriptor")
+               + digest(self.executor, "executor") + uint(self.retention_start_slot, 8)
+               + uint(self.retention_deadline, 8) + uint(self.closed_slot, 8))
+        if len(out) != RESULT_TOMBSTONE_BYTES:
+            raise AssertionError("DCRZ length")
+        return out
+
+    @classmethod
+    def decode(cls, raw: bytes) -> ResultTombstone:
+        raw = bytes(raw)
+        if (len(raw) != RESULT_TOMBSTONE_BYTES or raw[:4] != b"DCRZ" or raw[4:6] != b"\x01\x00"
+                or raw[6:8] != bytes(2)):
+            raise Refusal(RESULT_STATE)
+        return cls(raw[8:40], raw[40:72], int.from_bytes(raw[72:80], "little"),
+                   int.from_bytes(raw[80:88], "little"), int.from_bytes(raw[88:96], "little"))
+
+
+def finalize_result_v7(document: Dcm2V6, result: ResultV5) -> None:
+    binding = document.run_binding
+    if (result.descriptor != document.descriptor or result.executor != document.authority
+            or result.terms != document.terms
+            or (result.request_id, result.consumer_digest, result.output_first_position,
+                result.output_count, result.output_width) != (binding.request_id, binding.consumer_digest,
+                                                               binding.output_first_position, binding.output_count,
+                                                               binding.output_width)):
+        raise Refusal(RESULT_STATE)
+    result.document_root = document.document_root
+    result.finalize_slot, result.dispute_deadline = document.finalize_slot, document.dispute_deadline
+
+
+def resolve_status_v7(document: Dcm2V6, result: ResultV5, *, now: int) -> int:
+    if result.status != STATUS_PENDING or result.document_closed:
+        raise Refusal(RESULT_STATE)
+    if document.flags & FLAG_REFUTED:
+        status = STATUS_REFUTED
+    elif (document.flags & FLAG_FINAL and now > document.dispute_deadline and document.open_challenges == 0
+          and result.outputs_attested == result.output_count):
+        status = STATUS_FINAL
+    else:
+        raise Refusal(RESULT_STATE)
+    result.status, result.status_slot, result.challenger_wins = status, now, document.challenger_wins
+    return status
+
+
+def encode_descriptor_only_v7(tag: int, descriptor: bytes) -> bytes:
+    if tag not in (TAG_CLOSE_DOCUMENT, TAG_RESOLVE_RESULT, TAG_CLOSE_RESULT):
+        raise Refusal(CL_MALFORMED)
+    return uint(tag, 1) + digest(descriptor, "descriptor")
+
+
+def close_document_v7(document: Dcm2V6, result: ResultV5, *, now: int, signer: bytes) -> dict[str, int | bool]:
+    if result.document_closed:
+        raise Refusal(CL_CLOSE)
+    finalized = bool(document.flags & FLAG_FINAL)
+    if not finalized:
+        if signer != document.authority:
+            raise Refusal(CL_AUTHORITY)
+        status = result.status
+    else:
+        if now <= document.dispute_deadline or document.open_challenges != 0:
+            raise Refusal(CL_CLOSE)
+        if document.flags & FLAG_REFUTED:
+            status = STATUS_REFUTED
+        elif result.outputs_attested != result.output_count:
+            raise Refusal(RESULT_STATE)
+        else:
+            status = STATUS_SETTLED
+    if not 0 <= now < 1 << 64 or now > (1 << 64) - 1 - result.retention_slots:
+        raise Refusal(CL_OVERFLOW)
+    returned = 0
+    if document.executor_bond_state == BOND_HELD:
+        returned = document.terms.executor_bond_lamports
+        document.executor_bond_state = BOND_RETURNED
+    if status != result.status:
+        result.status, result.status_slot = status, now
+        result.challenger_wins = document.challenger_wins
+    result.document_closed = 1
+    result.retention_start_slot = now
+    result.retention_deadline = now + result.retention_slots
+    return {"status": status, "finalized": finalized, "executor_bond_returned": returned,
+            "retention_start_slot": now, "retention_deadline": result.retention_deadline}
+
+
+def close_result_v7(result: ResultV5, *, now: int, executor: bytes) -> ResultTombstone:
+    if not result.document_closed or result.retention_start_slot == 0:
+        raise Refusal(CL_CLOSE)
+    if result.retention_deadline != result.retention_start_slot + result.retention_slots:
+        raise Refusal(CL_OVERFLOW)
+    if now < result.retention_deadline:
+        raise Refusal(CL_CLOSE)
+    if executor != result.executor:
+        raise Refusal(CL_AUTHORITY)
+    return ResultTombstone(result.descriptor, result.executor, result.retention_start_slot,
+                           result.retention_deadline, now)
+
+
+def encode_close_result(descriptor: bytes) -> bytes:
+    return encode_descriptor_only_v7(TAG_CLOSE_RESULT, descriptor)
+
+
+def encode_close_result_v7(descriptor: bytes) -> bytes:
+    return encode_close_result(descriptor)
 
 
 @dataclass(frozen=True)
@@ -629,6 +983,117 @@ class Dcm2V5:
         self.positions_complete, self.peaks, self.prefix_root = mmr_append(self.descriptor, self.positions_complete, self.peaks, position_root)
 
 
+DCM2_V6_BYTES = 2_072
+DCM2_V6_TERMS_AT = 1_816
+DCM2_V6_BINDING_AT = 1_912
+
+
+@dataclass
+class Dcm2V6:
+    descriptor: bytes
+    authority: bytes
+    position_count: int
+    segment_count: int
+    total_entries: int
+    terms: RunTerms
+    pt2s: bytes
+    pt2s_sha256: bytes
+    model_root: bytes
+    position_table_root: bytes
+    prompt_commitment: bytes
+    registry: bytes
+    registry_table_root: bytes
+    dea2: bytes
+    dfs2: bytes
+    registry_epoch: int
+    family_count: int
+    run_binding: RunBinding
+    flags: int = FLAG_ARMED | FLAG_ROOT_ONLY | FLAG_SEALED
+    positions_complete: int = 0
+    entries_complete: int = 0
+    document_root: bytes = bytes(32)
+    open_challenges: int = 0
+    challenger_wins: int = 0
+    finalize_slot: int = 0
+    dispute_deadline: int = 0
+    prefix_root: bytes = bytes(32)
+    family_table_digest: bytes = bytes(32)
+    peaks: tuple[Peak, ...] = ()
+    executor_bond_state: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.run_binding.executor != self.authority or check_run_binding_v7(self.run_binding, position_count=self.position_count) != 0:
+            raise Refusal(RUN_BINDING)
+        if self.executor_bond_state is None:
+            self.executor_bond_state = BOND_HELD if self.terms.executor_bond_lamports else BOND_NONE
+
+    @property
+    def dispute_window(self) -> int:
+        return self.terms.challenge_window_slots
+
+    def encode(self) -> bytes:
+        if len(self.peaks) > PEAK_SLOTS:
+            raise Refusal(CL_MALFORMED)
+        out = (b"DCM2" + uint(6, 2) + uint(self.flags, 2) + digest(self.descriptor) + digest(self.authority)
+               + uint(self.position_count, 4) + uint(self.segment_count, 2) + bytes(6)
+               + uint(self.positions_complete, 4) + uint(self.entries_complete, 8) + digest(self.document_root)
+               + uint(self.open_challenges, 4) + uint(self.challenger_wins, 4) + uint(self.finalize_slot, 8)
+               + uint(self.dispute_deadline, 8) + digest(self.prefix_root) + uint(self.dispute_window, 8)
+               + uint(self.total_entries, 8) + digest(self.pt2s) + digest(self.pt2s_sha256) + digest(self.model_root)
+               + digest(self.position_table_root) + digest(self.prompt_commitment) + digest(self.registry)
+               + digest(self.registry_table_root) + digest(self.dea2) + digest(self.dfs2) + digest(self.family_table_digest)
+               + uint(self.registry_epoch, 4) + uint(self.family_count, 2) + uint((self.position_count - 1).bit_length(), 1)
+               + b"\x03" + uint(len(self.peaks), 1) + uint(self.executor_bond_state, 1) + bytes(6))
+        if len(out) != DCM2_HEADER:
+            raise AssertionError("DCM2 v6 header")
+        for peak in self.peaks:
+            out += uint(peak.level, 1) + bytes(3) + uint(peak.first, 4) + digest(peak.digest)
+        out += bytes(PEAK_BYTES * (PEAK_SLOTS - len(self.peaks))) + self.terms.encode() + self.run_binding.encode()
+        if len(out) != DCM2_V6_BYTES:
+            raise AssertionError("DCM2 v6 length")
+        return out
+
+    @classmethod
+    def decode(cls, raw: bytes) -> Dcm2V6:
+        raw = bytes(raw)
+        if len(raw) != DCM2_V6_BYTES or raw[:4] != b"DCM2" or raw[4:6] != b"\x06\x00":
+            raise Refusal(CL_MALFORMED)
+        u16 = lambda at: int.from_bytes(raw[at:at + 2], "little")
+        u32 = lambda at: int.from_bytes(raw[at:at + 4], "little")
+        u64 = lambda at: int.from_bytes(raw[at:at + 8], "little")
+        flags = u16(6)
+        position_count = u32(72)
+        if (flags & ~63 or flags & (FLAG_ROOT_ONLY | FLAG_SEALED) != FLAG_ROOT_ONLY | FLAG_SEALED
+                or raw[78:84] != bytes(6) or raw[527] != COMMITMENT_VERSION
+                or raw[526] != (position_count - 1).bit_length() or raw[530:536] != bytes(6)
+                or raw[528] > PEAK_SLOTS or raw[529] > BOND_RETURNED):
+            raise Refusal(CL_MALFORMED)
+        terms = RunTerms.decode(raw[DCM2_V6_TERMS_AT:DCM2_V6_BINDING_AT])
+        binding = RunBinding.decode(raw[DCM2_V6_BINDING_AT:])
+        if (binding.executor != raw[40:72] or binding.output_first_position + binding.output_count > position_count
+                or check_run_binding_v7(binding, position_count=position_count) != 0):
+            raise Refusal(CL_MALFORMED)
+        if u64(184) != terms.challenge_window_slots or ((raw[529] == BOND_NONE) != (terms.executor_bond_lamports == 0)):
+            raise Refusal(CL_MALFORMED)
+        peaks = []
+        for index in range(raw[528]):
+            at = DCM2_HEADER + PEAK_BYTES * index
+            if raw[at + 1:at + 4] != bytes(3):
+                raise Refusal(CL_MALFORMED)
+            peaks.append(Peak(u32(at + 4), raw[at], raw[at + 8:at + 40]))
+        if raw[DCM2_HEADER + PEAK_BYTES * raw[528]:DCM2_V6_TERMS_AT] != bytes(PEAK_BYTES * (PEAK_SLOTS - raw[528])):
+            raise Refusal(CL_MALFORMED)
+        return cls(raw[8:40], raw[40:72], position_count, u16(76), u64(192), terms, raw[200:232], raw[232:264],
+                   raw[264:296], raw[296:328], raw[328:360], raw[360:392], raw[392:424], raw[424:456], raw[456:488],
+                   u32(520), u16(524), binding, flags, u32(84), u64(88), raw[96:128], u32(128), u32(132),
+                   u64(136), u64(144), raw[152:184], raw[488:520], tuple(peaks), raw[529])
+
+    def append_position(self, position: int, position_root: bytes) -> None:
+        if position != self.positions_complete:
+            raise Refusal(APPEND_ORDER)
+        self.positions_complete, self.peaks, self.prefix_root = mmr_append(self.descriptor, self.positions_complete, self.peaks, position_root)
+
+
 def encode_land_position_roots(descriptor: bytes, first: int, roots: Sequence[bytes]) -> bytes:
     if not 1 <= len(roots) <= 255:
         raise Refusal(CL_MALFORMED)
@@ -673,7 +1138,9 @@ def decode_dpr2(raw: bytes, *, allow_partial: bool = False) -> tuple[bytes, list
     landed = int.from_bytes(raw[44:48], "little")
     if count < 1 or landed > count or (not allow_partial and landed != count):
         raise Refusal(CL_MALFORMED)
-    if len(raw) not in (DPR2_HEADER + 32 * landed, DPR2_HEADER + 32 * count):
+    minimum = DPR2_HEADER + 32 * landed
+    maximum = DPR2_HEADER + 32 * count
+    if len(raw) < minimum or len(raw) > maximum or (not allow_partial and len(raw) != maximum):
         raise Refusal(CL_MALFORMED)
     roots = [raw[DPR2_HEADER + 32 * index:DPR2_HEADER + 32 * (index + 1)] for index in range(landed)]
     if any(root == bytes(32) for root in roots):
@@ -723,6 +1190,67 @@ def decode_event(raw: bytes) -> dict[str, Any]:
             result[field_name] = chunk if width == 32 else int.from_bytes(chunk, "little")
         at += width
     return result
+
+
+def event_body_bytes_v7(kind: int) -> int:
+    if kind not in EVENT_SCHEMA_V7:
+        raise Refusal(CL_MALFORMED)
+    return sum(width for _, width in EVENT_SCHEMA_V7[kind][1])
+
+
+def encode_event_v7(name: str, *, descriptor: bytes, slot: int, **fields: Any) -> bytes:
+    if name not in EVENT_KINDS_V7:
+        raise Refusal(CL_MALFORMED)
+    kind = EVENT_KINDS_V7[name]
+    values = dict(fields)
+    out = bytearray(EVENT_MAGIC + uint(EVENT_VERSION_V7, 2) + uint(kind, 1) + b"\0" + digest(descriptor) + uint(slot, 8))
+    for field_name, width in EVENT_SCHEMA_V7[kind][1]:
+        if field_name is None:
+            out += bytes(width)
+        elif width == 32:
+            value = bytes(values.pop(field_name))
+            if len(value) > 32:
+                raise Refusal(CL_MALFORMED)
+            out += value + bytes(32 - len(value))
+        else:
+            value = values.pop(field_name)
+            if field_name == "route" and value not in (ROUTE_BUILT_IN, ROUTE_CUSTOM, ROUTE_FALLBACK):
+                raise Refusal(CL_MALFORMED)
+            out += uint(value, width)
+    if values:
+        raise Refusal(CL_MALFORMED)
+    return bytes(out)
+
+
+def decode_event_v7(raw: bytes) -> dict[str, Any]:
+    raw = bytes(raw)
+    if len(raw) < EVENT_HEADER or raw[:4] != EVENT_MAGIC or raw[4:6] != uint(EVENT_VERSION_V7, 2) or raw[7]:
+        raise Refusal(CL_MALFORMED)
+    kind = raw[6]
+    if kind not in EVENT_SCHEMA_V7 or len(raw) != EVENT_HEADER + event_body_bytes_v7(kind):
+        raise Refusal(CL_MALFORMED)
+    name, schema = EVENT_SCHEMA_V7[kind]
+    result: dict[str, Any] = {"kind": name, "descriptor": raw[8:40], "slot": int.from_bytes(raw[40:48], "little")}
+    at = EVENT_HEADER
+    for field_name, width in schema:
+        chunk = raw[at:at + width]
+        if field_name is None:
+            if chunk != bytes(width):
+                raise Refusal(CL_MALFORMED)
+        else:
+            value = int.from_bytes(chunk, "little")
+            if field_name == "route" and value not in (ROUTE_BUILT_IN, ROUTE_CUSTOM, ROUTE_FALLBACK):
+                raise Refusal(CL_MALFORMED)
+            result[field_name] = chunk if width == 32 else value
+        at += width
+    return result
+
+
+def decode_event_any(raw: bytes) -> dict[str, Any]:
+    raw = bytes(raw)
+    if len(raw) >= 6 and raw[4:6] == uint(EVENT_VERSION_V7, 2):
+        return decode_event_v7(raw)
+    return decode_event(raw)
 
 
 def _node(descriptor: bytes, kind: int, scope: int, height: int,
@@ -971,7 +1499,7 @@ def check_family_body(body: bytes) -> int:
 
 
 @dataclass(frozen=True)
-class DescriptorSpec:
+class DescriptorSpecV6:
     """All public DPD2 fields needed to derive one document descriptor."""
 
     position_count: int
@@ -1022,17 +1550,116 @@ class DescriptorSpec:
         return sha256(self.preimage())
 
 
+def descriptor_preimage_v7(*, position_count: int, segment_count: int, family_count: int,
+                           total_entries: int, run_terms: RunTerms, binding: RunBinding,
+                           compiler_version: int, clause12_v4: bytes, definition_sha256: bytes,
+                           base_digests: Sequence[bytes], model_root: bytes, position_table_root: bytes,
+                           prompt_commitment: bytes, registry_epoch: int, registry: bytes,
+                           registry_table_root: bytes, family_body: bytes) -> bytes:
+    clause = bytes(clause12_v4)
+    if len(clause) != 43 or clause[:5] != b"\x04PT2P":
+        raise Refusal(PLAN_BINDING)
+    positions, segments = int.from_bytes(clause[5:9], "little"), int.from_bytes(clause[9:11], "little")
+    if (positions, segments) != (position_count, segment_count) or len(base_digests) != 3:
+        raise Refusal(PLAN_BINDING)
+    if min(position_count, segment_count, total_entries) <= 0:
+        raise Refusal(PLAN_BINDING)
+    if not 1 <= family_count <= MAX_FAMILIES or not 1 <= segment_count <= MAX_SEGMENTS:
+        raise Refusal(PLAN_BINDING)
+    if check_family_body(family_body) != family_count:
+        raise Refusal(PLAN_BINDING)
+    if any(value == bytes(32) for value in (model_root, position_table_root, prompt_commitment)):
+        raise Refusal(PLAN_BINDING)
+    if check_run_binding_v7(binding, position_count=position_count) != 0:
+        raise Refusal(RUN_BINDING)
+    out = (DESCRIPTOR_DOMAIN_V7 + uint(UNIFIED_VERSION_V7, 2) + uint(STORAGE_ROOT_ONLY, 1) + uint(COMMITMENT_VERSION, 1)
+           + uint(position_count, 4) + uint(segment_count, 2) + uint(family_count, 2)
+           + uint((position_count - 1).bit_length(), 1) + uint(compiler_version, 1) + bytes(2)
+           + uint(total_entries, 8) + run_terms.encode() + binding.encode() + clause
+           + digest(definition_sha256, "definition") + b"".join(digest(value, "base digest") for value in base_digests)
+           + digest(model_root, "model root") + digest(position_table_root, "position table root")
+           + digest(prompt_commitment, "prompt commitment") + uint(registry_epoch, 4) + digest(registry, "registry")
+           + digest(registry_table_root, "registry table root") + sha256(bytes(family_body)))
+    if len(out) != 679:
+        raise AssertionError("descriptor v7 length")
+    return out
+
+
+def descriptor_digest_v7(**fields) -> bytes:
+    return sha256(descriptor_preimage_v7(**fields))
+
+
+@dataclass(frozen=True)
+class DescriptorSpecV7:
+    position_count: int
+    segment_count: int
+    family_count: int
+    total_entries: int
+    terms: RunTerms
+    binding: RunBinding
+    compiler_version: int
+    clause12_v4: bytes
+    definition_sha256: bytes
+    base_digests: tuple[bytes, bytes, bytes]
+    model_root: bytes
+    position_table_root: bytes
+    prompt_commitment: bytes
+    registry_epoch: int
+    registry: bytes
+    registry_table_root: bytes
+    family_body: bytes
+
+    @property
+    def run_terms(self) -> RunTerms:
+        return self.terms
+
+    def preimage(self) -> bytes:
+        return descriptor_preimage_v7(position_count=self.position_count, segment_count=self.segment_count,
+                                       family_count=self.family_count, total_entries=self.total_entries,
+                                       run_terms=self.terms, binding=self.binding, compiler_version=self.compiler_version,
+                                       clause12_v4=self.clause12_v4, definition_sha256=self.definition_sha256,
+                                       base_digests=self.base_digests, model_root=self.model_root,
+                                       position_table_root=self.position_table_root, prompt_commitment=self.prompt_commitment,
+                                       registry_epoch=self.registry_epoch, registry=self.registry,
+                                       registry_table_root=self.registry_table_root, family_body=self.family_body)
+
+    def digest(self) -> bytes:
+        return sha256(self.preimage())
+
+
+DescriptorSpec = DescriptorSpecV7
+
+
 def family_count_from_body(body: bytes) -> int:
     return check_family_body(body)
 
 
-def encode_unified_init(terms: DisputeTerms, binding: RunBinding, *, model_root: bytes,
-                        position_table_root: bytes, prompt_commitment: bytes, family_body: bytes) -> bytes:
+def encode_unified_init_v7(terms: RunTerms, binding: RunBinding, *, model_root: bytes,
+                           position_table_root: bytes, prompt_commitment: bytes, family_body: bytes) -> bytes:
     family_count = family_count_from_body(family_body)
+    if check_run_binding_v7(binding) != 0:
+        raise Refusal(RUN_BINDING)
     if any(value == bytes(32) for value in (model_root, position_table_root, prompt_commitment)):
         raise Refusal(PLAN_BINDING)
-    return (bytes([TAG_UNIFIED_INIT]) + terms.encode() + binding.encode() + digest(model_root)
-            + digest(position_table_root) + digest(prompt_commitment) + uint(family_count, 2) + family_body)
+    return (bytes([TAG_UNIFIED_INIT]) + terms.encode() + binding.encode() + digest(model_root, "model root")
+            + digest(position_table_root, "position table root") + digest(prompt_commitment, "prompt commitment")
+            + uint(family_count, 2) + bytes(family_body))
+
+
+def encode_unified_init_v6(terms: DisputeTerms, binding: RunBinding, *, model_root: bytes,
+                           position_table_root: bytes, prompt_commitment: bytes, family_body: bytes) -> bytes:
+    return (bytes([TAG_UNIFIED_INIT]) + terms.encode() + binding.encode() + digest(model_root, "model root")
+            + digest(position_table_root, "position table root") + digest(prompt_commitment, "prompt commitment")
+            + uint(family_count_from_body(family_body), 2) + bytes(family_body))
+
+
+def encode_unified_init(terms: DisputeTerms | RunTerms, binding: RunBinding, *, model_root: bytes,
+                        position_table_root: bytes, prompt_commitment: bytes, family_body: bytes) -> bytes:
+    if isinstance(terms, RunTerms):
+        return encode_unified_init_v7(terms, binding, model_root=model_root, position_table_root=position_table_root,
+                                      prompt_commitment=prompt_commitment, family_body=family_body)
+    return encode_unified_init_v6(terms, binding, model_root=model_root, position_table_root=position_table_root,
+                                  prompt_commitment=prompt_commitment, family_body=family_body)
 
 
 def config_init_data(admin: bytes, registry_authority: bytes, template_seal_authority: bytes) -> bytes:
@@ -1066,16 +1693,25 @@ def decode_template_seal(raw: bytes) -> dict[str, Any]:
 
 
 def encode_challenge_leaf(descriptor: bytes, position: int, segment: int, local: int, leaf: bytes,
-                          path: Sequence[bytes], spp1: bytes, response_length: int, nonce: int) -> bytes:
+                          path: Sequence[bytes], spp1: bytes, nonce: int) -> bytes:
     decode_spp1(spp1)
-    if len(path) > 255 or len(leaf) != 32:
+    if len(path) > 255 or len(leaf) != 32 or any(len(item) != 32 for item in path):
         raise Refusal(CL_MALFORMED)
     return (bytes([TAG_CHALLENGE_LEAF]) + digest(descriptor) + uint(position, 4) + uint(segment, 2) + uint(local, 4)
-            + digest(leaf) + uint(response_length, 4) + uint(len(path), 1) + b"".join(path) + spp1 + uint(nonce, 4))
+            + digest(leaf) + uint(len(path), 1) + b"".join(path) + spp1 + uint(nonce, 4))
 
 
-def encode_challenge_position(descriptor: bytes, position: int, response_length: int, nonce: int) -> bytes:
-    return bytes([TAG_CHALLENGE_POSITION]) + digest(descriptor) + uint(position, 4) + uint(response_length, 4) + uint(nonce, 4)
+def encode_challenge_position(descriptor: bytes, position: int, nonce: int) -> bytes:
+    return bytes([TAG_CHALLENGE_POSITION]) + digest(descriptor) + uint(position, 4) + uint(nonce, 4)
+
+
+def encode_challenge_leaf_v7(descriptor: bytes, position: int, segment: int, local: int, leaf: bytes,
+                             path: Sequence[bytes], spp1: bytes, nonce: int) -> bytes:
+    return encode_challenge_leaf(descriptor, position, segment, local, leaf, path, spp1, nonce)
+
+
+def encode_challenge_position_v7(descriptor: bytes, position: int, nonce: int) -> bytes:
+    return encode_challenge_position(descriptor, position, nonce)
 
 
 def encode_reveal(digests: Sequence[bytes], tree_root: bytes | None = None) -> bytes:
@@ -1128,33 +1764,46 @@ def decode_challenge_record(raw: bytes) -> dict[str, Any]:
     raw = bytes(raw)
     if len(raw) != DCR1_BYTES or raw[:4] != b"DCR1" or raw[6:8] != uint(DCR1_VERSION, 2):
         raise Refusal(CL_MALFORMED)
-    return {
-        "phase": raw[4],
+    if raw[140:144] != bytes(4) or raw[145] not in (0, 1, 2) or raw[146:148] != bytes(2) or raw[144] not in (1, 2):
+        raise Refusal(CL_MALFORMED)
+    phase = raw[4]
+    result: dict[str, Any] = {
+        "phase": phase,
         "winner": raw[5],
         "challenger": raw[8:40],
         "executor": raw[40:72],
         "descriptor": raw[72:104],
         "leaf": raw[104:136],
         "local": int.from_bytes(raw[136:140], "little"),
-        "response_length": int.from_bytes(raw[140:144], "little"),
         "source": raw[144],
+        # Revision 6.1: the replay machine bound at open (1 A16, 2 V7; 0 opened before the binding).
+        "machine": raw[145],
         "deadline": int.from_bytes(raw[148:156], "little"),
         "position": int.from_bytes(raw[156:160], "little"),
         "segment": int.from_bytes(raw[160:162], "little"),
         "bond": int.from_bytes(raw[162:170], "little"),
-        "entry": int.from_bytes(raw[170:174], "little"),
-        "form": int.from_bytes(raw[174:176], "little"),
-        "position_staged": int.from_bytes(raw[176:178], "little"),
-        "position_segment_count": int.from_bytes(raw[178:180], "little"),
-        "position_verified": raw[180],
-        "target_verified": raw[176],
-        "read_count": int.from_bytes(raw[178:180], "little"),
-        "write_count": int.from_bytes(raw[180:182], "little"),
-        "read_bits": int.from_bytes(raw[348:356], "little")
-        | int.from_bytes(raw[396:404], "little") << 64,
+        "read_bits": int.from_bytes(raw[348:356], "little") | int.from_bytes(raw[396:404], "little") << 64,
         "family_table_verified": raw[3072],
         "family_table_staged": int.from_bytes(raw[3074:3076], "little"),
     }
+    if phase in (PHASE_RULED, PHASE_SETTLED):
+        cause = raw[RULING_CAUSE_AT]
+        if cause not in (CAUSE_VERDICT, CAUSE_CONVICT, CAUSE_TIMEOUT):
+            raise Refusal(CL_MALFORMED)
+        result["custom_settlement_deadline"] = int.from_bytes(raw[CUSTOM_SETTLEMENT_DEADLINE_AT:RULING_CAUSE_AT], "little")
+        result["ruling_cause"] = cause
+    else:
+        result.update({
+            "entry": int.from_bytes(raw[170:174], "little"),
+            "form": int.from_bytes(raw[174:176], "little"),
+            "position_staged": int.from_bytes(raw[176:178], "little"),
+            "position_segment_count": int.from_bytes(raw[178:180], "little"),
+            "position_verified": raw[180],
+            "target_verified": raw[176],
+            "read_count": int.from_bytes(raw[178:180], "little"),
+            "write_count": int.from_bytes(raw[180:182], "little"),
+        })
+    return result
 
 
 def legacy_tx_bytes(data_len: int, *, keys: int, instruction_accounts: int, signatures: int = 1,

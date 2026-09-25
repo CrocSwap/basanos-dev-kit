@@ -6,7 +6,7 @@ export type Integer = number | bigint;
 export type Seed = Uint8Array | string | PublicKey;
 export type Pda = readonly [PublicKey, number];
 
-export const SPEC_REVISION = 6;
+export const SPEC_REVISION = 7;
 export const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
 export const COMPUTE_BUDGET_PROGRAM = new PublicKey("ComputeBudget111111111111111111111111111111");
 export const UPGRADEABLE_LOADER = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
@@ -30,11 +30,16 @@ export const CHALLENGE_SEED = Buffer.from("dcg-unified-challenge", "ascii");
 export const RESPONSE_SEED = Buffer.from("dcg-hcl-response", "ascii");
 export const ROOT_DOMAIN = Buffer.from("basanos/dcg-envelope-seal-registry/2", "ascii");
 export const DESCRIPTOR_DOMAIN = Buffer.from("basanos/dcg-unified-descriptor/3", "ascii");
+export const DESCRIPTOR_DOMAIN_V7 = Buffer.from("basanos/dcg-unified-descriptor/4", "ascii");
 export const FAMILY_TABLE_DOMAIN = Buffer.from("basanos/dcg-rs1-table/1", "ascii");
 export const UNIFIED_VERSION = 1;
+export const UNIFIED_VERSION_V7 = 2;
 export const STORAGE_ROOT_ONLY = 1;
 export const COMMITMENT_VERSION = 3;
 export const MACHINE_NAME = Buffer.from("basanos/qwen35-4b-a16/1", "ascii");
+/** Spec revision 7: the V7 machine a 105-byte RegistryCreateV2 may name. */
+export const MACHINE_NAME_V7 = Buffer.from("basanos/qwen35-4b-a16/2", "ascii");
+export const ACCEPTED_MACHINES: readonly Uint8Array[] = [MACHINE_NAME, MACHINE_NAME_V7];
 export const MAX_FAMILIES = 24;
 export const MAX_SEGMENTS = 128;
 export const MAX_RS1_HEIGHT = 19;
@@ -44,6 +49,7 @@ export const MAX_ACCOUNT_BYTES = 10_485_760;
 export const PACKET_BYTES = 1_232;
 export const JSON_RPC_BODY_LIMIT = 50 * 1024;
 export const TERMS_BYTES = 48;
+export const RUN_TERMS_BYTES = 96;
 export const BINDING_BYTES = 160;
 export const WINDOW_CAP = 1n << 62n;
 export const BPS_DENOMINATOR = 10_000;
@@ -76,6 +82,8 @@ export const RUN_BINDING = 794;
 export const OUTPUT_PROOF = 795;
 export const RESULT_STATE = 796;
 export const SUMMARY_PRODUCER = 797;
+export const SETTLEMENT_PROGRAM = 798;
+export const DCR1_INCOMPLETE = 741;
 export const CL_MALFORMED = 580;
 export const CL_COORDINATE = 581;
 export const CL_AUTHORITY = 582;
@@ -118,6 +126,7 @@ export const TAGS: Readonly<Record<number, string>> = {
   180: "SelectSummaryV5",
   181: "AnswerSummaryV5",
   182: "CloseResponseV5",
+  185: "CloseResultV6",
 };
 export const TAG_REGISTRY_CREATE = 156;
 export const TAG_REGISTRY_WRITE = 157;
@@ -146,6 +155,14 @@ export const TAG_REVEAL_SUMMARY = 179;
 export const TAG_SELECT_SUMMARY = 180;
 export const TAG_ANSWER_SUMMARY = 181;
 export const TAG_CLOSE_RESPONSE = 182;
+export const TAG_CLOSE_RESULT = 185;
+export const SETTLEMENT_ESCROW_SEED = Buffer.from("dcg-hcl-settlement", "ascii");
+export const CAUSE_VERDICT = 1;
+export const CAUSE_CONVICT = 2;
+export const CAUSE_TIMEOUT = 3;
+export const ROUTE_BUILT_IN = 1;
+export const ROUTE_CUSTOM = 2;
+export const ROUTE_FALLBACK = 3;
 
 export const DCM2_V5_HEADER = 2_024;
 export const DCM2_TERMS_AT = 1_816;
@@ -182,6 +199,9 @@ export const PHASE_REVEAL = 5;
 export const PHASE_DESCEND = 6;
 export const PHASE_POSITION_REVEAL = 7;
 export const PHASE_SELECT = 8;
+export const PHASE_SUMMARY_REVEAL = 9;
+export const PHASE_SUMMARY_DESCEND = 10;
+export const PHASE_SUMMARY_ANSWER = 11;
 export const WINNER_EXECUTOR = 1;
 export const WINNER_CHALLENGER = 2;
 export const EVENT_MAGIC = Buffer.from("DLE1", "ascii");
@@ -204,6 +224,15 @@ export const EVENT_SCHEMA: Readonly<Record<number, EventSchema>> = {
 };
 export const EVENT_KINDS: Readonly<Record<string, number>> = Object.fromEntries(
   Object.entries(EVENT_SCHEMA).map(([kind, [name]]) => [name, Number(kind)]),
+);
+export const EVENT_VERSION_V7 = 2;
+export const EVENT_SCHEMA_V7: Readonly<Record<number, EventSchema>> = {
+  ...EVENT_SCHEMA,
+  7: ["settle", [["challenge", 32], ["winner", 32], ["record_bond_paid", 8], ["settlement_pot", 8], ["winner_payout", 8], ["loser_payout", 8], ["burn_payout", 8], ["route", 1], [null, 7]]],
+  11: ["close_result", [["executor", 32], ["refund", 8], ["retention_start_slot", 8], ["retention_deadline", 8], ["closed_slot", 8], [null, 4]]],
+};
+export const EVENT_KINDS_V7: Readonly<Record<string, number>> = Object.fromEntries(
+  Object.entries(EVENT_SCHEMA_V7).map(([kind, [name]]) => [name, Number(kind)]),
 );
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -327,7 +356,7 @@ export function pda(program: PublicKey | string | Uint8Array, ...seeds: Seed[]):
   }), key(program));
 }
 
-const ADDRESS_NAMES = ["registry", "template_seal", "admission", "document", "positions", "family_slots", "result", "challenge", "response"] as const;
+const ADDRESS_NAMES = ["registry", "template_seal", "admission", "document", "positions", "family_slots", "result", "challenge", "response", "settlement_escrow"] as const;
 
 export class AddressBook {
   readonly program: PublicKey;
@@ -342,6 +371,7 @@ export class AddressBook {
   readonly result?: Pda;
   readonly challenge?: Pda;
   readonly response?: Pda;
+  readonly settlementEscrow?: Pda;
 
   constructor(
     program: PublicKey,
@@ -356,6 +386,7 @@ export class AddressBook {
     result?: Pda,
     challenge?: Pda,
     response?: Pda,
+    settlementEscrow?: Pda,
   ) {
     this.program = program;
     this.config = config;
@@ -369,6 +400,7 @@ export class AddressBook {
     this.result = result;
     this.challenge = challenge;
     this.response = response;
+    this.settlementEscrow = settlementEscrow;
   }
 
   asDict(): Record<string, Pda> {
@@ -383,6 +415,7 @@ export class AddressBook {
       result: this.result,
       challenge: this.challenge,
       response: this.response,
+      settlement_escrow: this.settlementEscrow,
     };
     for (const [name, value] of Object.entries(entries)) if (value !== undefined) values[name] = value;
     return values;
@@ -400,6 +433,7 @@ export class AddressBook {
 
   get template_seal(): Pda | undefined { return this.templateSeal; }
   get family_slots(): Pda | undefined { return this.familySlots; }
+  get settlement_escrow(): Pda | undefined { return this.settlementEscrow; }
 }
 
 export interface AddressesOptions {
@@ -414,6 +448,7 @@ export interface AddressesOptions {
   registry?: Uint8Array;
   positionCount?: number;
   position_count?: number;
+  settlement?: boolean;
 }
 
 export function addresses(program: PublicKey | string | Uint8Array, options: AddressesOptions = {}): AddressBook {
@@ -439,6 +474,7 @@ export function addresses(program: PublicKey | string | Uint8Array, options: Add
     if (options.challenger !== undefined) {
       values.challenge = pda(programKey, CHALLENGE_SEED, descriptor, keyBytes(options.challenger), uint(options.nonce ?? 0, 4));
       values.response = pda(programKey, RESPONSE_SEED, values.challenge[0]);
+      if (options.settlement === true) values.settlement_escrow = pda(programKey, SETTLEMENT_ESCROW_SEED, values.challenge[0]);
     }
   }
   return new AddressBook(
@@ -454,8 +490,15 @@ export function addresses(program: PublicKey | string | Uint8Array, options: Add
     values.result,
     values.challenge,
     values.response,
+    values.settlement_escrow,
   );
 }
+
+export function settlementEscrowAddress(program: PublicKey | string | Uint8Array, challenge: PublicKey | string | Uint8Array): Pda {
+  return pda(program, SETTLEMENT_ESCROW_SEED, keyBytes(challenge));
+}
+
+export const settlement_escrow_address = settlementEscrowAddress;
 
 export const deriveAddresses = addresses;
 export const derive_addresses = addresses;
@@ -536,6 +579,120 @@ export function checkDisputeTerms(terms: DisputeTerms, roundFloorSlots: Integer 
 }
 
 export const check_dispute_terms = checkDisputeTerms;
+
+export interface RunTermsInput {
+  challengeWindowSlots?: Integer;
+  challenge_window_slots?: Integer;
+  responseWindowSlots?: Integer;
+  response_window_slots?: Integer;
+  challengerBondLamports?: Integer;
+  challenger_bond_lamports?: Integer;
+  executorBondLamports?: Integer;
+  executor_bond_lamports?: Integer;
+  executorRewardBps?: Integer;
+  executor_reward_bps?: Integer;
+  settlementProgram?: Uint8Array;
+  settlement_program?: Uint8Array;
+  customSettleWindowSlots?: Integer;
+  custom_settle_window_slots?: Integer;
+  resultRetentionSlots?: Integer;
+  result_retention_slots?: Integer;
+}
+
+export class RunTerms {
+  readonly challengeWindowSlots: Integer;
+  readonly responseWindowSlots: Integer;
+  readonly challengerBondLamports: Integer;
+  readonly executorBondLamports: Integer;
+  readonly executorRewardBps: Integer;
+  readonly settlementProgram: Buffer;
+  readonly customSettleWindowSlots: Integer;
+  readonly resultRetentionSlots: Integer;
+
+  constructor(input: RunTermsInput);
+  constructor(challengeWindowSlots: Integer, responseWindowSlots: Integer, challengerBondLamports: Integer, executorBondLamports: Integer, executorRewardBps: Integer, settlementProgram: Uint8Array, customSettleWindowSlots: Integer, resultRetentionSlots: Integer);
+  constructor(inputOrChallenge: RunTermsInput | Integer, response?: Integer, challengerBond?: Integer, executorBond?: Integer, reward?: Integer, settlement?: Uint8Array, customWindow?: Integer, retention?: Integer) {
+    if (typeof inputOrChallenge === "object") {
+      const input = inputOrChallenge;
+      this.challengeWindowSlots = input.challengeWindowSlots ?? input.challenge_window_slots ?? 0;
+      this.responseWindowSlots = input.responseWindowSlots ?? input.response_window_slots ?? 0;
+      this.challengerBondLamports = input.challengerBondLamports ?? input.challenger_bond_lamports ?? 0;
+      this.executorBondLamports = input.executorBondLamports ?? input.executor_bond_lamports ?? 0;
+      this.executorRewardBps = input.executorRewardBps ?? input.executor_reward_bps ?? 0;
+      this.settlementProgram = buffer(input.settlementProgram ?? input.settlement_program ?? new Uint8Array(32));
+      this.customSettleWindowSlots = input.customSettleWindowSlots ?? input.custom_settle_window_slots ?? 0;
+      this.resultRetentionSlots = input.resultRetentionSlots ?? input.result_retention_slots ?? 0;
+    } else {
+      this.challengeWindowSlots = inputOrChallenge;
+      this.responseWindowSlots = response ?? 0;
+      this.challengerBondLamports = challengerBond ?? 0;
+      this.executorBondLamports = executorBond ?? 0;
+      this.executorRewardBps = reward ?? 0;
+      this.settlementProgram = buffer(settlement ?? new Uint8Array(32));
+      this.customSettleWindowSlots = customWindow ?? 0;
+      this.resultRetentionSlots = retention ?? 0;
+    }
+  }
+
+  get challenge_window_slots(): Integer { return this.challengeWindowSlots; }
+  get response_window_slots(): Integer { return this.responseWindowSlots; }
+  get challenger_bond_lamports(): Integer { return this.challengerBondLamports; }
+  get executor_bond_lamports(): Integer { return this.executorBondLamports; }
+  get executor_reward_bps(): Integer { return this.executorRewardBps; }
+  get settlement_program(): Buffer { return this.settlementProgram; }
+  get custom_settle_window_slots(): Integer { return this.customSettleWindowSlots; }
+  get result_retention_slots(): Integer { return this.resultRetentionSlots; }
+
+  encode(): Buffer {
+    if (checkRunTerms(this) !== 0) throw new Refusal(DISPUTE_TERMS);
+    const out = Buffer.concat([
+      Buffer.from("DDT2", "ascii"), uint(1, 2), Buffer.alloc(2), uint(this.challengeWindowSlots, 8), uint(this.responseWindowSlots, 8), uint(this.challengerBondLamports, 8), uint(this.executorBondLamports, 8), uint(this.executorRewardBps, 2), Buffer.alloc(6), digest(this.settlementProgram, "settlement program"), uint(this.customSettleWindowSlots, 8), uint(this.resultRetentionSlots, 8),
+    ]);
+    if (out.length !== RUN_TERMS_BYTES) throw new Error("run terms length");
+    return out;
+  }
+
+  static decode(raw: Uint8Array): RunTerms {
+    const bytes = buffer(raw);
+    if (bytes.length !== RUN_TERMS_BYTES || !sameBytes(bytes.subarray(0, 4), Buffer.from("DDT2")) || !sameBytes(bytes.subarray(4, 6), uint(1, 2)) || !sameBytes(bytes.subarray(6, 8), Buffer.alloc(2)) || !sameBytes(bytes.subarray(42, 48), Buffer.alloc(6))) throw new Refusal(DISPUTE_TERMS);
+    const result = new RunTerms(readInteger(bytes, 8, 8), readInteger(bytes, 16, 8), readInteger(bytes, 24, 8), readInteger(bytes, 32, 8), readInteger(bytes, 40, 2), bytes.subarray(48, 80), readInteger(bytes, 80, 8), readInteger(bytes, 88, 8));
+    if (checkRunTerms(result) !== 0) throw new Refusal(DISPUTE_TERMS);
+    return result;
+  }
+}
+
+export function checkRunTerms(terms: RunTerms, roundFloorSlots: Integer = 1): number {
+  if (asBigInt(roundFloorSlots) < 1n) throw new Error("round floor");
+  const program = terms.settlementProgram;
+  const valid = compare(terms.challengeWindowSlots, 1) >= 0 && compare(terms.challengeWindowSlots, WINDOW_CAP) <= 0
+    && compare(roundFloorSlots, terms.responseWindowSlots) <= 0 && compare(terms.responseWindowSlots, WINDOW_CAP) <= 0
+    && compare(terms.challengerBondLamports, 0) >= 0 && compare(terms.challengerBondLamports, 1n << 64n) < 0
+    && compare(terms.executorBondLamports, 0) >= 0 && compare(terms.executorBondLamports, 1n << 64n) < 0
+    && compare(terms.executorRewardBps, 0) >= 0 && compare(terms.executorRewardBps, BPS_DENOMINATOR) <= 0
+    && program.length === 32
+    && (isZero(program) === (compare(terms.customSettleWindowSlots, 0) === 0))
+    && (isZero(program) || (compare(terms.customSettleWindowSlots, 1) >= 0 && compare(terms.customSettleWindowSlots, WINDOW_CAP) <= 0))
+    && compare(terms.resultRetentionSlots, 1) >= 0 && compare(terms.resultRetentionSlots, WINDOW_CAP) <= 0;
+  return valid ? 0 : DISPUTE_TERMS;
+}
+
+export const check_run_terms = checkRunTerms;
+
+export function builtInSettlement(terms: RunTerms): [Integer, Integer] {
+  const reward = asBigInt(terms.executorBondLamports) * asBigInt(terms.executorRewardBps) / BigInt(BPS_DENOMINATOR);
+  return [integer(reward), integer(asBigInt(terms.executorBondLamports) - reward)];
+}
+
+export const built_in_settlement = builtInSettlement;
+
+export function encodeSettlementInstruction(options: { ruling: number; cause: number; winner: Uint8Array; loser: Uint8Array; challenge: Uint8Array; result: Uint8Array; descriptor: Uint8Array; settlementPot: Integer; challengerBond: Integer; builtInWinnerAmount: Integer; builtInBurnAmount: Integer }): Buffer {
+  if (options.ruling !== 2 || ![CAUSE_VERDICT, CAUSE_CONVICT, CAUSE_TIMEOUT].includes(options.cause)) throw new Refusal(SETTLEMENT_PROGRAM);
+  const out = Buffer.concat([Buffer.from("BSS1", "ascii"), uint(1, 2), uint(options.ruling, 1), uint(options.cause, 1), digest(options.winner, "winner"), digest(options.loser, "loser"), digest(options.challenge, "challenge"), digest(options.result, "result"), digest(options.descriptor, "descriptor"), uint(options.settlementPot, 8), uint(options.challengerBond, 8), uint(options.builtInWinnerAmount, 8), uint(options.builtInBurnAmount, 8)]);
+  if (out.length !== 200) throw new Error("BSS1 length");
+  return out;
+}
+
+export const encode_settlement_instruction = encodeSettlementInstruction;
 
 export interface RunBindingInput {
   executor: Uint8Array;
@@ -630,12 +787,12 @@ export function resultBytes(outputCount: number, outputWidth: number): number {
 
 export const result_bytes = resultBytes;
 
-export function checkRunBinding(binding: RunBinding, options: { positionCount?: number | null; signer?: Uint8Array | null } = {}): number {
+export function checkRunBinding(binding: RunBinding, options: { positionCount?: number | null; signer?: Uint8Array | null; resultSize?: number } = {}): number {
   let valid = binding.executor.length === 32 && binding.requestId.length === 32 && binding.consumerDigest.length === 32 && binding.seed.length === 32
     && !isZero(binding.executor) && (isZero(binding.requestId) === isZero(binding.consumerDigest)) && binding.outputCount >= 1
     && binding.outputWidth >= 1 && binding.outputWidth <= MAX_OUTPUT_WIDTH && binding.outputWrite >= 0 && binding.outputWrite < 256
     && binding.outputBaseEntry >= 0 && binding.outputBaseEntry < 2 ** 32 && binding.outputFirstPosition >= 0 && binding.outputFirstPosition < 2 ** 32
-    && binding.outputCount >= 0 && binding.outputCount < 2 ** 32 && resultBytes(binding.outputCount, binding.outputWidth) <= MAX_ACCOUNT_BYTES;
+    && binding.outputCount >= 0 && binding.outputCount < 2 ** 32 && (options.resultSize === undefined ? resultBytes(binding.outputCount, binding.outputWidth) <= MAX_ACCOUNT_BYTES : options.resultSize <= MAX_ACCOUNT_BYTES);
   if (valid && options.positionCount !== undefined && options.positionCount !== null) valid = binding.outputFirstPosition + binding.outputCount <= options.positionCount;
   if (valid && options.signer !== undefined && options.signer !== null) valid = sameBytes(binding.executor, options.signer);
   return valid ? 0 : RUN_BINDING;
@@ -773,6 +930,311 @@ export class ResultV4 {
     if (readNumber(bytes, 204, 4) !== result.outputsAttested) throw new Refusal(RESULT_STATE);
     return result;
   }
+}
+
+export const RESULT_V5_VERSION = 5;
+export const RESULT_V5_HEADER = 336;
+export const RESULT_V5_TERMS_AT = 216;
+export const RESULT_TOMBSTONE_BYTES = 96;
+export const RETENTION_SLOTS_AT = 312;
+export const RETENTION_START_AT = 320;
+export const RETENTION_DEADLINE_AT = 328;
+export const CUSTOM_SETTLEMENT_DEADLINE_AT = 170;
+export const RULING_CAUSE_AT = 178;
+
+export function resultV5Bytes(outputCount: number, outputWidth: number): number {
+  return RESULT_V5_HEADER + outputCount * outputWidth + Math.ceil(outputCount / 8);
+}
+
+export const result_v5_bytes = resultV5Bytes;
+
+export function checkRunBindingV7(binding: RunBinding, options: { positionCount?: number | null; signer?: Uint8Array | null } = {}): number {
+  return checkRunBinding(binding, { ...options, resultSize: resultV5Bytes(binding.outputCount, binding.outputWidth) });
+}
+
+export const check_run_binding_v7 = checkRunBindingV7;
+
+export interface ResultV5Input {
+  descriptor: Uint8Array;
+  executor: Uint8Array;
+  requestId?: Uint8Array;
+  request_id?: Uint8Array;
+  consumerDigest?: Uint8Array;
+  consumer_digest?: Uint8Array;
+  terms: RunTerms;
+  outputFirstPosition: number;
+  output_first_position?: number;
+  outputCount: number;
+  output_count?: number;
+  outputWidth: number;
+  output_width?: number;
+  status?: number;
+  documentClosed?: number;
+  document_closed?: number;
+  documentRoot?: Uint8Array;
+  document_root?: Uint8Array;
+  finalizeSlot?: Integer;
+  finalize_slot?: Integer;
+  disputeDeadline?: Integer;
+  dispute_deadline?: Integer;
+  statusSlot?: Integer;
+  status_slot?: Integer;
+  challengerWins?: number;
+  challenger_wins?: number;
+  retentionStartSlot?: Integer;
+  retention_start_slot?: Integer;
+  retentionDeadline?: Integer;
+  retention_deadline?: Integer;
+  outputs?: Array<Uint8Array | null>;
+}
+
+export class ResultV5 {
+  readonly descriptor: Buffer;
+  readonly executor: Buffer;
+  readonly requestId: Buffer;
+  readonly consumerDigest: Buffer;
+  readonly terms: RunTerms;
+  readonly outputFirstPosition: number;
+  readonly outputCount: number;
+  readonly outputWidth: number;
+  status: number;
+  documentClosed: number;
+  documentRoot: Buffer;
+  finalizeSlot: Integer;
+  disputeDeadline: Integer;
+  statusSlot: Integer;
+  challengerWins: number;
+  retentionStartSlot: Integer;
+  retentionDeadline: Integer;
+  outputs: Array<Uint8Array | null>;
+
+  constructor(input: ResultV5Input) {
+    this.descriptor = buffer(input.descriptor);
+    this.executor = buffer(input.executor);
+    this.requestId = buffer(input.requestId ?? input.request_id ?? new Uint8Array(32));
+    this.consumerDigest = buffer(input.consumerDigest ?? input.consumer_digest ?? new Uint8Array(32));
+    this.terms = input.terms;
+    this.outputFirstPosition = input.outputFirstPosition ?? input.output_first_position ?? 0;
+    this.outputCount = input.outputCount ?? input.output_count ?? 0;
+    this.outputWidth = input.outputWidth ?? input.output_width ?? 0;
+    this.status = input.status ?? STATUS_PENDING;
+    this.documentClosed = input.documentClosed ?? input.document_closed ?? 0;
+    this.documentRoot = buffer(input.documentRoot ?? input.document_root ?? new Uint8Array(32));
+    this.finalizeSlot = input.finalizeSlot ?? input.finalize_slot ?? 0;
+    this.disputeDeadline = input.disputeDeadline ?? input.dispute_deadline ?? 0;
+    this.statusSlot = input.statusSlot ?? input.status_slot ?? 0;
+    this.challengerWins = input.challengerWins ?? input.challenger_wins ?? 0;
+    this.retentionStartSlot = input.retentionStartSlot ?? input.retention_start_slot ?? 0;
+    this.retentionDeadline = input.retentionDeadline ?? input.retention_deadline ?? 0;
+    this.outputs = input.outputs === undefined ? Array.from({ length: this.outputCount }, () => null) : input.outputs.map((value) => value === null ? null : buffer(value));
+  }
+
+  get request_id(): Buffer { return this.requestId; }
+  get consumer_digest(): Buffer { return this.consumerDigest; }
+  get output_first_position(): number { return this.outputFirstPosition; }
+  get output_count(): number { return this.outputCount; }
+  get output_width(): number { return this.outputWidth; }
+  get document_root(): Buffer { return this.documentRoot; }
+  get finalize_slot(): Integer { return this.finalizeSlot; }
+  get dispute_deadline(): Integer { return this.disputeDeadline; }
+  get status_slot(): Integer { return this.statusSlot; }
+  get challenger_wins(): number { return this.challengerWins; }
+  get closed(): number { return this.documentClosed; }
+  get document_closed(): number { return this.documentClosed; }
+  get retention_start_slot(): Integer { return this.retentionStartSlot; }
+  get retention_deadline(): Integer { return this.retentionDeadline; }
+  get retentionSlots(): Integer { return this.terms.resultRetentionSlots; }
+  get retention_slots(): Integer { return this.terms.resultRetentionSlots; }
+
+  static atInit(descriptor: Uint8Array, binding: RunBinding, terms: RunTerms): ResultV5 {
+    return new ResultV5({ descriptor, executor: binding.executor, requestId: binding.requestId, consumerDigest: binding.consumerDigest, terms, outputFirstPosition: binding.outputFirstPosition, outputCount: binding.outputCount, outputWidth: binding.outputWidth });
+  }
+
+  get outputsAttested(): number { return this.outputs.reduce((count, value) => count + (value === null ? 0 : 1), 0); }
+  get outputs_attested(): number { return this.outputsAttested; }
+  get usable(): boolean { return USABLE_STATUSES.has(this.status) && !isZero(this.documentRoot) && this.outputsAttested === this.outputCount; }
+
+  encode(): Buffer {
+    if (![STATUS_PENDING, STATUS_FINAL, STATUS_REFUTED, STATUS_SETTLED].includes(this.status) || ![0, 1].includes(this.documentClosed) || this.outputs.length !== this.outputCount || this.outputWidth < 1 || this.outputWidth > MAX_OUTPUT_WIDTH || (compare(this.retentionStartSlot, 0) === 0 && compare(this.retentionDeadline, 0) !== 0) || (compare(this.retentionStartSlot, 0) !== 0 && compare(this.retentionDeadline, add(this.retentionStartSlot, this.retentionSlots)) !== 0)) throw new Refusal(RESULT_STATE);
+    const header = Buffer.concat([
+      Buffer.from("DCR2", "ascii"), uint(RESULT_V5_VERSION, 2), uint(this.status, 1), uint(this.documentClosed, 1), digest(this.descriptor), digest(this.documentRoot), digest(this.requestId), digest(this.consumerDigest), digest(this.executor), uint(this.finalizeSlot, 8), uint(this.disputeDeadline, 8), uint(this.statusSlot, 8), uint(this.challengerWins, 4), uint(this.outputCount, 4), uint(this.outputFirstPosition, 4), uint(this.outputsAttested, 4), uint(this.outputWidth, 1), Buffer.alloc(7), this.terms.encode(), uint(this.retentionSlots, 8), uint(this.retentionStartSlot, 8), uint(this.retentionDeadline, 8),
+    ]);
+    if (header.length !== RESULT_V5_HEADER) throw new Error("DCR2 v5 header");
+    const values: Buffer[] = [];
+    const bitmap = Buffer.alloc(Math.ceil(this.outputCount / 8));
+    this.outputs.forEach((value, index) => {
+      if (value === null) values.push(Buffer.alloc(this.outputWidth));
+      else {
+        if (value.length !== this.outputWidth) throw new Refusal(RESULT_STATE);
+        values.push(buffer(value));
+        bitmap[Math.floor(index / 8)] |= 1 << (index % 8);
+      }
+    });
+    const encoded = Buffer.concat([header, ...values, bitmap]);
+    if (encoded.length > MAX_ACCOUNT_BYTES) throw new Refusal(RESULT_STATE);
+    return encoded;
+  }
+
+  static decode(raw: Uint8Array): ResultV5 {
+    const bytes = buffer(raw);
+    if (bytes.length < RESULT_V5_HEADER || !sameBytes(bytes.subarray(0, 4), Buffer.from("DCR2")) || !sameBytes(bytes.subarray(4, 6), uint(RESULT_V5_VERSION, 2))) throw new Refusal(RESULT_STATE);
+    const count = readNumber(bytes, 196, 4);
+    const width = bytes[208];
+    if (bytes[6] > STATUS_SETTLED || bytes[7] > 1 || !sameBytes(bytes.subarray(209, 216), Buffer.alloc(7)) || width < 1 || width > MAX_OUTPUT_WIDTH || bytes.length !== resultV5Bytes(count, width) || bytes.length > MAX_ACCOUNT_BYTES) throw new Refusal(RESULT_STATE);
+    const terms = RunTerms.decode(bytes.subarray(RESULT_V5_TERMS_AT, RESULT_V5_TERMS_AT + RUN_TERMS_BYTES));
+    if (readBigInt(bytes, RETENTION_SLOTS_AT, 8) !== asBigInt(terms.resultRetentionSlots)) throw new Refusal(RESULT_STATE);
+    const bitmapAt = RESULT_V5_HEADER + count * width;
+    const bitmap = bytes.subarray(bitmapAt);
+    if (count % 8 !== 0 && (bitmap[bitmap.length - 1] >> (count % 8)) !== 0) throw new Refusal(RESULT_STATE);
+    const outputs: Array<Uint8Array | null> = [];
+    for (let index = 0; index < count; index += 1) {
+      const value = bytes.subarray(RESULT_V5_HEADER + index * width, RESULT_V5_HEADER + (index + 1) * width);
+      const present = ((bitmap[Math.floor(index / 8)] >> (index % 8)) & 1) !== 0;
+      if (!present && !value.every((item) => item === 0)) throw new Refusal(RESULT_STATE);
+      outputs.push(present ? value : null);
+    }
+    const result = new ResultV5({ descriptor: bytes.subarray(8, 40), executor: bytes.subarray(136, 168), requestId: bytes.subarray(72, 104), consumerDigest: bytes.subarray(104, 136), terms, outputFirstPosition: readNumber(bytes, 200, 4), outputCount: count, outputWidth: width, status: bytes[6], documentClosed: bytes[7], documentRoot: bytes.subarray(40, 72), finalizeSlot: readInteger(bytes, 168, 8), disputeDeadline: readInteger(bytes, 176, 8), statusSlot: readInteger(bytes, 184, 8), challengerWins: readNumber(bytes, 192, 4), retentionStartSlot: readInteger(bytes, RETENTION_START_AT, 8), retentionDeadline: readInteger(bytes, RETENTION_DEADLINE_AT, 8), outputs });
+    if (readNumber(bytes, 204, 4) !== result.outputsAttested) throw new Refusal(RESULT_STATE);
+    if (compare(result.retentionStartSlot, 0) === 0) {
+      if (compare(result.retentionDeadline, 0) !== 0) throw new Refusal(RESULT_STATE);
+    } else if (compare(result.retentionDeadline, add(result.retentionStartSlot, result.retentionSlots)) !== 0) throw new Refusal(RESULT_STATE);
+    return result;
+  }
+}
+
+export class ResultTombstone {
+  readonly descriptor: Buffer;
+  readonly executor: Buffer;
+  readonly retentionStartSlot: Integer;
+  readonly retentionDeadline: Integer;
+  readonly closedSlot: Integer;
+
+  constructor(input: { descriptor: Uint8Array; executor: Uint8Array; retentionStartSlot: Integer; retention_start_slot?: Integer; retentionDeadline: Integer; retention_deadline?: Integer; closedSlot: Integer; closed_slot?: Integer }) {
+    this.descriptor = buffer(input.descriptor);
+    this.executor = buffer(input.executor);
+    this.retentionStartSlot = input.retentionStartSlot ?? input.retention_start_slot ?? 0;
+    this.retentionDeadline = input.retentionDeadline ?? input.retention_deadline ?? 0;
+    this.closedSlot = input.closedSlot ?? input.closed_slot ?? 0;
+  }
+
+  get retention_start_slot(): Integer { return this.retentionStartSlot; }
+  get retention_deadline(): Integer { return this.retentionDeadline; }
+  get closed_slot(): Integer { return this.closedSlot; }
+
+  encode(): Buffer {
+    const out = Buffer.concat([Buffer.from("DCRZ", "ascii"), uint(1, 2), Buffer.alloc(2), digest(this.descriptor), digest(this.executor), uint(this.retentionStartSlot, 8), uint(this.retentionDeadline, 8), uint(this.closedSlot, 8)]);
+    if (out.length !== RESULT_TOMBSTONE_BYTES) throw new Error("DCRZ length");
+    return out;
+  }
+
+  static decode(raw: Uint8Array): ResultTombstone {
+    const bytes = buffer(raw);
+    if (bytes.length !== RESULT_TOMBSTONE_BYTES || !sameBytes(bytes.subarray(0, 4), Buffer.from("DCRZ")) || !sameBytes(bytes.subarray(4, 6), uint(1, 2)) || !sameBytes(bytes.subarray(6, 8), Buffer.alloc(2))) throw new Refusal(RESULT_STATE);
+    return new ResultTombstone({ descriptor: bytes.subarray(8, 40), executor: bytes.subarray(40, 72), retentionStartSlot: readInteger(bytes, 72, 8), retentionDeadline: readInteger(bytes, 80, 8), closedSlot: readInteger(bytes, 88, 8) });
+  }
+}
+
+export function encodeCloseResult(descriptor: Uint8Array): Buffer {
+  return Buffer.concat([Buffer.from([TAG_CLOSE_RESULT]), digest(descriptor)]);
+}
+
+export const encode_close_result = encodeCloseResult;
+export const encodeCloseResultV7 = encodeCloseResult;
+export const encode_close_result_v7 = encodeCloseResult;
+
+export function encodeDescriptorOnlyV7(tag: number, descriptor: Uint8Array): Buffer {
+  if (![TAG_CLOSE_DOCUMENT, TAG_RESOLVE_RESULT, TAG_CLOSE_RESULT].includes(tag)) throw new Refusal(CL_MALFORMED);
+  return Buffer.concat([Buffer.from([tag]), digest(descriptor)]);
+}
+
+export const encode_descriptor_only_v7 = encodeDescriptorOnlyV7;
+
+export function finalizeResultV7(document: Dcm2V6, result: ResultV5): void {
+  const binding = document.runBinding;
+  if (!sameBytes(result.descriptor, document.descriptor) || !sameBytes(result.executor, document.authority)
+    || !sameTerms(result.terms, document.terms)
+    || !sameBytes(result.requestId, binding.requestId) || !sameBytes(result.consumerDigest, binding.consumerDigest)
+    || result.outputFirstPosition !== binding.outputFirstPosition || result.outputCount !== binding.outputCount || result.outputWidth !== binding.outputWidth) throw new Refusal(RESULT_STATE);
+  result.documentRoot = document.documentRoot;
+  result.finalizeSlot = document.finalizeSlot;
+  result.disputeDeadline = document.disputeDeadline;
+}
+
+export const finalize_result_v7 = finalizeResultV7;
+
+export function resolveStatusV7(document: Dcm2V6, result: ResultV5, now: Integer): number {
+  if (result.status !== STATUS_PENDING || result.documentClosed !== 0) throw new Refusal(RESULT_STATE);
+  let status: number;
+  if ((document.flags & FLAG_REFUTED) !== 0) status = STATUS_REFUTED;
+  else if ((document.flags & FLAG_FINAL) !== 0 && compare(now, document.disputeDeadline) > 0 && document.openChallenges === 0 && result.outputsAttested === result.outputCount) status = STATUS_FINAL;
+  else throw new Refusal(RESULT_STATE);
+  result.status = status;
+  result.statusSlot = now;
+  result.challengerWins = document.challengerWins;
+  return status;
+}
+
+export const resolve_status_v7 = resolveStatusV7;
+
+export function closeDocumentV7(document: Dcm2V6, result: ResultV5, now: Integer, signer: Uint8Array): { status: number; finalized: boolean; executorBondReturned: Integer; retentionStartSlot: Integer; retentionDeadline: Integer } {
+  if (result.documentClosed !== 0) throw new Refusal(CL_CLOSE);
+  const finalized = (document.flags & FLAG_FINAL) !== 0;
+  let status: number;
+  if (!finalized) {
+    if (!sameBytes(signer, document.authority)) throw new Refusal(CL_AUTHORITY);
+    status = result.status;
+  } else {
+    if (compare(now, document.disputeDeadline) <= 0 || document.openChallenges !== 0) throw new Refusal(CL_CLOSE);
+    if ((document.flags & FLAG_REFUTED) !== 0) status = STATUS_REFUTED;
+    else if (result.outputsAttested !== result.outputCount) throw new Refusal(RESULT_STATE);
+    else status = STATUS_SETTLED;
+  }
+  if (compare(now, 0) < 0 || compare(now, (1n << 64n) - 1n - asBigInt(result.retentionSlots)) > 0) throw new Refusal(CL_OVERFLOW);
+  let returned: Integer = 0;
+  if (document.executorBondState === BOND_HELD) {
+    returned = document.terms.executorBondLamports;
+    document.executorBondState = BOND_RETURNED;
+  }
+  if (status !== result.status) {
+    result.status = status;
+    result.statusSlot = now;
+    result.challengerWins = document.challengerWins;
+  }
+  result.documentClosed = 1;
+  result.retentionStartSlot = now;
+  result.retentionDeadline = add(now, result.retentionSlots);
+  return { status, finalized, executorBondReturned: returned, retentionStartSlot: result.retentionStartSlot, retentionDeadline: result.retentionDeadline };
+}
+
+export const close_document_v7 = closeDocumentV7;
+
+export function closeResultV7(result: ResultV5, now: Integer, executor: Uint8Array): ResultTombstone {
+  if (result.documentClosed !== 1 || compare(result.retentionStartSlot, 0) === 0) throw new Refusal(CL_CLOSE);
+  if (compare(result.retentionDeadline, add(result.retentionStartSlot, result.retentionSlots)) !== 0) throw new Refusal(CL_OVERFLOW);
+  if (compare(now, result.retentionDeadline) < 0) throw new Refusal(CL_CLOSE);
+  if (!sameBytes(executor, result.executor)) throw new Refusal(CL_AUTHORITY);
+  return new ResultTombstone({ descriptor: result.descriptor, executor: result.executor, retentionStartSlot: result.retentionStartSlot, retentionDeadline: result.retentionDeadline, closedSlot: now });
+}
+
+export const close_result_v7 = closeResultV7;
+
+function sameTerms(left: RunTerms | DisputeTerms, right: RunTerms | DisputeTerms): boolean {
+  if (left instanceof RunTerms || right instanceof RunTerms) {
+    if (!(left instanceof RunTerms) || !(right instanceof RunTerms)) return false;
+    return compare(left.challengeWindowSlots, right.challengeWindowSlots) === 0
+      && compare(left.responseWindowSlots, right.responseWindowSlots) === 0
+      && compare(left.challengerBondLamports, right.challengerBondLamports) === 0
+      && compare(left.executorBondLamports, right.executorBondLamports) === 0
+      && compare(left.executorRewardBps, right.executorRewardBps) === 0
+      && sameBytes(left.settlementProgram, right.settlementProgram)
+      && compare(left.customSettleWindowSlots, right.customSettleWindowSlots) === 0
+      && compare(left.resultRetentionSlots, right.resultRetentionSlots) === 0;
+  }
+  return compare(left.challengeWindowSlots, right.challengeWindowSlots) === 0
+    && compare(left.responseWindowSlots, right.responseWindowSlots) === 0
+    && compare(left.challengerBondLamports, right.challengerBondLamports) === 0
+    && compare(left.executorBondLamports, right.executorBondLamports) === 0
+    && compare(left.executorRewardBps, right.executorRewardBps) === 0;
 }
 
 export interface Peak {
@@ -964,6 +1426,163 @@ export class Dcm2V5 {
   }
 }
 
+export const DCM2_V6_BYTES = 2_072;
+export const DCM2_V6_TERMS_AT = 1_816;
+export const DCM2_V6_BINDING_AT = 1_912;
+
+export interface Dcm2V6Input {
+  descriptor: Uint8Array;
+  authority: Uint8Array;
+  positionCount: number;
+  segmentCount: number;
+  totalEntries: Integer;
+  terms: RunTerms;
+  pt2s: Uint8Array;
+  pt2sSha256: Uint8Array;
+  modelRoot: Uint8Array;
+  positionTableRoot: Uint8Array;
+  promptCommitment: Uint8Array;
+  registry: Uint8Array;
+  registryTableRoot: Uint8Array;
+  dea2: Uint8Array;
+  dfs2: Uint8Array;
+  registryEpoch: number;
+  familyCount: number;
+  runBinding: RunBinding;
+  flags?: number;
+  positionsComplete?: number;
+  entriesComplete?: Integer;
+  documentRoot?: Uint8Array;
+  openChallenges?: number;
+  challengerWins?: number;
+  finalizeSlot?: Integer;
+  disputeDeadline?: Integer;
+  prefixRoot?: Uint8Array;
+  familyTableDigest?: Uint8Array;
+  peaks?: readonly Peak[];
+  executorBondState?: number | null;
+  pt2s_sha256?: Uint8Array;
+  position_table_root?: Uint8Array;
+  prompt_commitment?: Uint8Array;
+  registry_table_root?: Uint8Array;
+  family_count?: number;
+  total_entries?: Integer;
+  run_binding?: RunBinding;
+}
+
+export class Dcm2V6 {
+  readonly descriptor: Buffer;
+  readonly authority: Buffer;
+  readonly positionCount: number;
+  readonly segmentCount: number;
+  readonly totalEntries: Integer;
+  readonly terms: RunTerms;
+  readonly pt2s: Buffer;
+  readonly pt2sSha256: Buffer;
+  readonly modelRoot: Buffer;
+  readonly positionTableRoot: Buffer;
+  readonly promptCommitment: Buffer;
+  readonly registry: Buffer;
+  readonly registryTableRoot: Buffer;
+  readonly dea2: Buffer;
+  readonly dfs2: Buffer;
+  readonly registryEpoch: number;
+  readonly familyCount: number;
+  readonly runBinding: RunBinding;
+  flags: number;
+  positionsComplete: number;
+  entriesComplete: Integer;
+  documentRoot: Buffer;
+  openChallenges: number;
+  challengerWins: number;
+  finalizeSlot: Integer;
+  disputeDeadline: Integer;
+  prefixRoot: Buffer;
+  familyTableDigest: Buffer;
+  peaks: Peak[];
+  executorBondState: number;
+
+  constructor(input: Dcm2V6Input) {
+    this.descriptor = buffer(input.descriptor);
+    this.authority = buffer(input.authority);
+    this.positionCount = input.positionCount;
+    this.segmentCount = input.segmentCount;
+    this.totalEntries = input.totalEntries ?? input.total_entries ?? 0;
+    this.terms = input.terms;
+    this.pt2s = buffer(input.pt2s);
+    this.pt2sSha256 = buffer(input.pt2sSha256 ?? input.pt2s_sha256);
+    this.modelRoot = buffer(input.modelRoot);
+    this.positionTableRoot = buffer(input.positionTableRoot ?? input.position_table_root);
+    this.promptCommitment = buffer(input.promptCommitment ?? input.prompt_commitment);
+    this.registry = buffer(input.registry);
+    this.registryTableRoot = buffer(input.registryTableRoot ?? input.registry_table_root);
+    this.dea2 = buffer(input.dea2);
+    this.dfs2 = buffer(input.dfs2);
+    this.registryEpoch = input.registryEpoch;
+    this.familyCount = input.familyCount ?? input.family_count ?? 0;
+    this.runBinding = input.runBinding ?? input.run_binding as RunBinding;
+    this.flags = input.flags ?? (FLAG_ARMED | FLAG_ROOT_ONLY | FLAG_SEALED);
+    this.positionsComplete = input.positionsComplete ?? 0;
+    this.entriesComplete = input.entriesComplete ?? 0;
+    this.documentRoot = buffer(input.documentRoot ?? new Uint8Array(32));
+    this.openChallenges = input.openChallenges ?? 0;
+    this.challengerWins = input.challengerWins ?? 0;
+    this.finalizeSlot = input.finalizeSlot ?? 0;
+    this.disputeDeadline = input.disputeDeadline ?? 0;
+    this.prefixRoot = buffer(input.prefixRoot ?? new Uint8Array(32));
+    this.familyTableDigest = buffer(input.familyTableDigest ?? new Uint8Array(32));
+    this.peaks = (input.peaks ?? []).map((peak) => ({ first: peak.first, level: peak.level, digest: buffer(peak.digest) }));
+    if (!sameBytes(this.runBinding.executor, this.authority) || checkRunBindingV7(this.runBinding, { positionCount: this.positionCount }) !== 0) throw new Refusal(RUN_BINDING);
+    this.executorBondState = input.executorBondState === undefined || input.executorBondState === null ? (compare(this.terms.executorBondLamports, 0) === 0 ? BOND_NONE : BOND_HELD) : input.executorBondState;
+  }
+
+  get run_binding(): RunBinding { return this.runBinding; }
+  get disputeWindow(): Integer { return this.terms.challengeWindowSlots; }
+  get dispute_window(): Integer { return this.disputeWindow; }
+  get total_entries(): Integer { return this.totalEntries; }
+  get challenger_wins(): number { return this.challengerWins; }
+
+  encode(): Buffer {
+    if (this.peaks.length > PEAK_SLOTS) throw new Refusal(CL_MALFORMED);
+    const out: Buffer[] = [
+      Buffer.from("DCM2", "ascii"), uint(6, 2), uint(this.flags, 2), digest(this.descriptor), digest(this.authority), uint(this.positionCount, 4), uint(this.segmentCount, 2), Buffer.alloc(6), uint(this.positionsComplete, 4), uint(this.entriesComplete, 8), digest(this.documentRoot), uint(this.openChallenges, 4), uint(this.challengerWins, 4), uint(this.finalizeSlot, 8), uint(this.disputeDeadline, 8), digest(this.prefixRoot), uint(this.disputeWindow, 8), uint(this.totalEntries, 8), digest(this.pt2s), digest(this.pt2sSha256), digest(this.modelRoot), digest(this.positionTableRoot), digest(this.promptCommitment), digest(this.registry), digest(this.registryTableRoot), digest(this.dea2), digest(this.dfs2), digest(this.familyTableDigest), uint(this.registryEpoch, 4), uint(this.familyCount, 2), uint(bitLength(add(this.positionCount, -1)), 1), Buffer.from([COMMITMENT_VERSION]), uint(this.peaks.length, 1), uint(this.executorBondState, 1), Buffer.alloc(6),
+    ];
+    for (const peak of this.peaks) out.push(uint(peak.level, 1), Buffer.alloc(3), uint(peak.first, 4), digest(peak.digest));
+    out.push(Buffer.alloc(PEAK_BYTES * (PEAK_SLOTS - this.peaks.length)), this.terms.encode(), this.runBinding.encode());
+    const encoded = Buffer.concat(out);
+    if (encoded.length !== DCM2_V6_BYTES) throw new Error("DCM2 v6 length");
+    return encoded;
+  }
+
+  static decode(raw: Uint8Array): Dcm2V6 {
+    const bytes = buffer(raw);
+    if (bytes.length !== DCM2_V6_BYTES || !sameBytes(bytes.subarray(0, 4), Buffer.from("DCM2")) || !sameBytes(bytes.subarray(4, 6), uint(6, 2))) throw new Refusal(CL_MALFORMED);
+    const flags = readNumber(bytes, 6, 2);
+    const positionCount = readNumber(bytes, 72, 4);
+    if ((flags & ~63) !== 0 || (flags & (FLAG_ROOT_ONLY | FLAG_SEALED)) !== (FLAG_ROOT_ONLY | FLAG_SEALED) || !sameBytes(bytes.subarray(78, 84), Buffer.alloc(6)) || bytes[527] !== COMMITMENT_VERSION || bytes[526] !== bitLength(add(positionCount, -1)) || !sameBytes(bytes.subarray(530, 536), Buffer.alloc(6)) || bytes[528] > PEAK_SLOTS || bytes[529] > BOND_RETURNED) throw new Refusal(CL_MALFORMED);
+    const terms = RunTerms.decode(bytes.subarray(DCM2_V6_TERMS_AT, DCM2_V6_BINDING_AT));
+    const binding = RunBinding.decode(bytes.subarray(DCM2_V6_BINDING_AT));
+    if (!sameBytes(binding.executor, bytes.subarray(40, 72)) || binding.outputFirstPosition + binding.outputCount > positionCount || checkRunBindingV7(binding, { positionCount }) !== 0) throw new Refusal(CL_MALFORMED);
+    if (readBigInt(bytes, 184, 8) !== asBigInt(terms.challengeWindowSlots) || ((bytes[529] === BOND_NONE) !== (compare(terms.executorBondLamports, 0) === 0))) throw new Refusal(CL_MALFORMED);
+    const peaks: Peak[] = [];
+    for (let index = 0; index < bytes[528]; index += 1) {
+      const at = DCM2_HEADER + PEAK_BYTES * index;
+      if (!sameBytes(bytes.subarray(at + 1, at + 4), Buffer.alloc(3))) throw new Refusal(CL_MALFORMED);
+      peaks.push({ first: readNumber(bytes, at + 4, 4), level: bytes[at], digest: bytes.subarray(at + 8, at + 40) });
+    }
+    if (!sameBytes(bytes.subarray(DCM2_HEADER + PEAK_BYTES * bytes[528], DCM2_V6_TERMS_AT), Buffer.alloc(PEAK_BYTES * (PEAK_SLOTS - bytes[528])))) throw new Refusal(CL_MALFORMED);
+    return new Dcm2V6({ descriptor: bytes.subarray(8, 40), authority: bytes.subarray(40, 72), positionCount, segmentCount: readNumber(bytes, 76, 2), totalEntries: readInteger(bytes, 192, 8), terms, pt2s: bytes.subarray(200, 232), pt2sSha256: bytes.subarray(232, 264), modelRoot: bytes.subarray(264, 296), positionTableRoot: bytes.subarray(296, 328), promptCommitment: bytes.subarray(328, 360), registry: bytes.subarray(360, 392), registryTableRoot: bytes.subarray(392, 424), dea2: bytes.subarray(424, 456), dfs2: bytes.subarray(456, 488), registryEpoch: readNumber(bytes, 520, 4), familyCount: readNumber(bytes, 524, 2), runBinding: binding, flags, positionsComplete: readNumber(bytes, 84, 4), entriesComplete: readInteger(bytes, 88, 8), documentRoot: bytes.subarray(96, 128), openChallenges: readNumber(bytes, 128, 4), challengerWins: readNumber(bytes, 132, 4), finalizeSlot: readInteger(bytes, 136, 8), disputeDeadline: readInteger(bytes, 144, 8), prefixRoot: bytes.subarray(152, 184), familyTableDigest: bytes.subarray(488, 520), peaks, executorBondState: bytes[529] });
+  }
+
+  appendPosition(position: number, positionRoot: Uint8Array): void {
+    if (position !== this.positionsComplete) throw new Refusal(APPEND_ORDER);
+    const result = mmrAppend(this.descriptor, this.positionsComplete, this.peaks, positionRoot);
+    this.positionsComplete = result.count;
+    this.peaks = result.peaks;
+    this.prefixRoot = result.root;
+  }
+}
+
 export function encodeLandPositionRoots(descriptor: Uint8Array, first: number, roots: readonly Uint8Array[]): Buffer {
   if (roots.length < 1 || roots.length > 255) throw new Refusal(CL_MALFORMED);
   return Buffer.concat([Buffer.from([TAG_LAND_POSITION_ROOTS]), digest(descriptor), uint(first, 4), uint(roots.length, 1), ...roots.map((root) => digest(root))]);
@@ -971,7 +1590,7 @@ export function encodeLandPositionRoots(descriptor: Uint8Array, first: number, r
 
 export const encode_land_position_roots = encodeLandPositionRoots;
 
-export function landPositionRoots(document: Dcm2V5, dpr2: Array<Uint8Array | null>, data: Uint8Array, signer: Uint8Array): void {
+export function landPositionRoots(document: Dcm2V5 | Dcm2V6, dpr2: Array<Uint8Array | null>, data: Uint8Array, signer: Uint8Array): void {
   const bytes = buffer(data);
   if (bytes.length < 38 || bytes[0] !== TAG_LAND_POSITION_ROOTS || bytes[37] === 0 || bytes.length !== 38 + 32 * bytes[37]) throw new Refusal(CL_MALFORMED);
   if (!sameBytes(bytes.subarray(1, 33), document.descriptor) || dpr2.length !== document.positionCount) throw new Refusal(CL_MALFORMED);
@@ -1005,7 +1624,9 @@ export function decodeDpr2(raw: Uint8Array, options: { allowPartial?: boolean } 
   const count = readNumber(bytes, 40, 4);
   const landed = readNumber(bytes, 44, 4);
   if (count < 1 || landed > count || (!options.allowPartial && landed !== count)) throw new Refusal(CL_MALFORMED);
-  if (bytes.length !== DPR2_HEADER + 32 * landed && bytes.length !== DPR2_HEADER + 32 * count) throw new Refusal(CL_MALFORMED);
+  const minimum = DPR2_HEADER + 32 * landed;
+  const maximum = DPR2_HEADER + 32 * count;
+  if (bytes.length < minimum || bytes.length > maximum || (!options.allowPartial && bytes.length !== maximum)) throw new Refusal(CL_MALFORMED);
   const roots: Buffer[] = [];
   for (let index = 0; index < landed; index += 1) roots.push(bytes.subarray(DPR2_HEADER + 32 * index, DPR2_HEADER + 32 * (index + 1)));
   if (roots.some((root) => isZero(root))) throw new Refusal(CL_ROOT);
@@ -1094,6 +1715,84 @@ export function decodeEvent(raw: Uint8Array): Record<string, Integer | Buffer | 
 }
 
 export const decode_event = decodeEvent;
+
+export function eventBodyBytesV7(kind: number): number {
+  const schema = EVENT_SCHEMA_V7[kind];
+  if (schema === undefined) throw new Refusal(CL_MALFORMED);
+  return schema[1].reduce((sum, [, width]) => sum + width, 0);
+}
+
+export const event_body_bytes_v7 = eventBodyBytesV7;
+
+export function encodeEventV7(name: string, descriptor: Uint8Array, slot: Integer, fields?: EventFields): Buffer;
+export function encodeEventV7(name: string, options: EventEncodeOptions): Buffer;
+export function encodeEventV7(name: string, descriptorOrOptions: Uint8Array | EventEncodeOptions, slot?: Integer, fields?: EventFields): Buffer {
+  const kind = EVENT_KINDS_V7[name];
+  if (kind === undefined) throw new Error("event kind");
+  const input = eventInput(descriptorOrOptions, slot, fields);
+  const schemaNames = new Set(EVENT_SCHEMA_V7[kind][1].map(([fieldName]) => fieldName).filter((fieldName): fieldName is string => fieldName !== null));
+  const normalized: EventFields = {};
+  for (const [fieldName, value] of Object.entries(input.fields)) {
+    const snake = fieldName.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+    const normalizedName = schemaNames.has(fieldName) ? fieldName : schemaNames.has(snake) ? snake : fieldName;
+    if (!schemaNames.has(normalizedName)) throw new Error(`unknown event field ${fieldName}`);
+    normalized[normalizedName] = value as Integer | Uint8Array;
+  }
+  const remaining: EventFields = normalized;
+  const out: Buffer[] = [EVENT_MAGIC, uint(EVENT_VERSION_V7, 2), uint(kind, 1), Buffer.alloc(1), digest(input.descriptor), uint(input.slot, 8)];
+  for (const [fieldName, width] of EVENT_SCHEMA_V7[kind][1]) {
+    if (fieldName === null) out.push(Buffer.alloc(width));
+    else {
+      const value = remaining[fieldName];
+      if (value === undefined) throw new Error(`missing event field ${fieldName}`);
+      delete remaining[fieldName];
+      if (width === 32) {
+        const bytes = value as Uint8Array;
+        if (bytes.length > 32) throw new Error(`${fieldName} is too long`);
+        out.push(Buffer.from(bytes), Buffer.alloc(32 - bytes.length));
+      } else {
+        const integer = value as Integer;
+        if (fieldName === "route" && ![ROUTE_BUILT_IN, ROUTE_CUSTOM, ROUTE_FALLBACK].includes(Number(integer))) throw new Error("invalid settlement route");
+        out.push(uint(integer, width));
+      }
+    }
+  }
+  if (Object.keys(remaining).length > 0) throw new Error(`unknown event fields ${Object.keys(remaining).sort().join(", ")}`);
+  return Buffer.concat(out);
+}
+
+export const encode_event_v7 = encodeEventV7;
+
+export function decodeEventV7(raw: Uint8Array): Record<string, Integer | Buffer | string> {
+  const bytes = buffer(raw);
+  if (bytes.length < EVENT_HEADER || !sameBytes(bytes.subarray(0, 4), EVENT_MAGIC) || !sameBytes(bytes.subarray(4, 6), uint(EVENT_VERSION_V7, 2)) || bytes[7] !== 0) throw new Refusal(CL_MALFORMED);
+  const kind = bytes[6];
+  const schema = EVENT_SCHEMA_V7[kind];
+  if (schema === undefined || bytes.length !== EVENT_HEADER + eventBodyBytesV7(kind)) throw new Refusal(CL_MALFORMED);
+  const result: Record<string, Integer | Buffer | string> = { kind: schema[0], descriptor: bytes.subarray(8, 40), slot: readInteger(bytes, 40, 8) };
+  let at = EVENT_HEADER;
+  for (const [fieldName, width] of schema[1]) {
+    const chunk = bytes.subarray(at, at + width);
+    if (fieldName === null) {
+      if (!chunk.every((value) => value === 0)) throw new Refusal(CL_MALFORMED);
+    } else {
+      const value = width === 32 ? chunk : readInteger(chunk, 0, width);
+      if (fieldName === "route" && ![ROUTE_BUILT_IN, ROUTE_CUSTOM, ROUTE_FALLBACK].includes(Number(value))) throw new Refusal(CL_MALFORMED);
+      result[fieldName] = value;
+    }
+    at += width;
+  }
+  return result;
+}
+
+export const decode_event_v7 = decodeEventV7;
+
+export function decodeEventAny(raw: Uint8Array): Record<string, Integer | Buffer | string> {
+  const bytes = buffer(raw);
+  return bytes.length >= 6 && sameBytes(bytes.subarray(4, 6), uint(EVENT_VERSION_V7, 2)) ? decodeEventV7(bytes) : decodeEvent(bytes);
+}
+
+export const decode_event_any = decodeEventAny;
 
 interface TreeNode { digest: Buffer; first: number; last: number }
 
@@ -1347,7 +2046,7 @@ export function checkFamilyBody(body: Uint8Array): number {
 
 export const check_family_body = checkFamilyBody;
 
-export interface DescriptorSpecInput {
+export interface DescriptorSpecV6Input {
   positionCount: number;
   segmentCount: number;
   familyCount: number;
@@ -1381,7 +2080,7 @@ export interface DescriptorSpecInput {
   family_body?: Uint8Array;
 }
 
-export class DescriptorSpec {
+export class DescriptorSpecV6 {
   readonly positionCount: number;
   readonly segmentCount: number;
   readonly familyCount: number;
@@ -1400,7 +2099,7 @@ export class DescriptorSpec {
   readonly registryTableRoot: Buffer;
   readonly familyBody: Buffer;
 
-  constructor(input: DescriptorSpecInput) {
+  constructor(input: DescriptorSpecV6Input) {
     this.positionCount = input.positionCount ?? input.position_count ?? 0;
     this.segmentCount = input.segmentCount ?? input.segment_count ?? 0;
     this.familyCount = input.familyCount ?? input.family_count ?? 0;
@@ -1452,13 +2151,144 @@ export class DescriptorSpec {
   digest(): Buffer { return sha256(this.preimage()); }
 }
 
+export interface DescriptorSpecV7Input {
+  positionCount: number;
+  segmentCount: number;
+  familyCount: number;
+  totalEntries: Integer;
+  terms?: RunTerms;
+  binding: RunBinding;
+  compilerVersion: number;
+  clause12V4: Uint8Array;
+  definitionSha256: Uint8Array;
+  baseDigests: readonly Uint8Array[];
+  modelRoot: Uint8Array;
+  positionTableRoot: Uint8Array;
+  promptCommitment: Uint8Array;
+  registryEpoch: number;
+  registry: Uint8Array;
+  registryTableRoot: Uint8Array;
+  familyBody: Uint8Array;
+  position_count?: number;
+  segment_count?: number;
+  family_count?: number;
+  total_entries?: Integer;
+  runTerms?: RunTerms;
+  run_terms?: RunTerms;
+  compiler_version?: number;
+  clause12_v4?: Uint8Array;
+  definition_sha256?: Uint8Array;
+  base_digests?: readonly Uint8Array[];
+  model_root?: Uint8Array;
+  position_table_root?: Uint8Array;
+  prompt_commitment?: Uint8Array;
+  registry_epoch?: number;
+  registry_table_root?: Uint8Array;
+  family_body?: Uint8Array;
+}
+
+export class DescriptorSpecV7 {
+  readonly positionCount: number;
+  readonly segmentCount: number;
+  readonly familyCount: number;
+  readonly totalEntries: Integer;
+  readonly terms: RunTerms;
+  readonly binding: RunBinding;
+  readonly compilerVersion: number;
+  readonly clause12V4: Buffer;
+  readonly definitionSha256: Buffer;
+  readonly baseDigests: Buffer[];
+  readonly modelRoot: Buffer;
+  readonly positionTableRoot: Buffer;
+  readonly promptCommitment: Buffer;
+  readonly registryEpoch: number;
+  readonly registry: Buffer;
+  readonly registryTableRoot: Buffer;
+  readonly familyBody: Buffer;
+
+  constructor(input: DescriptorSpecV7Input) {
+    this.positionCount = input.positionCount ?? input.position_count ?? 0;
+    this.segmentCount = input.segmentCount ?? input.segment_count ?? 0;
+    this.familyCount = input.familyCount ?? input.family_count ?? 0;
+    this.totalEntries = input.totalEntries ?? input.total_entries ?? 0;
+    this.terms = input.terms ?? input.runTerms ?? input.run_terms as RunTerms;
+    this.binding = input.binding;
+    this.compilerVersion = input.compilerVersion ?? input.compiler_version ?? 0;
+    this.clause12V4 = buffer(input.clause12V4 ?? input.clause12_v4 ?? new Uint8Array());
+    this.definitionSha256 = buffer(input.definitionSha256 ?? input.definition_sha256 ?? new Uint8Array());
+    this.baseDigests = (input.baseDigests ?? input.base_digests ?? []).map((item) => buffer(item));
+    this.modelRoot = buffer(input.modelRoot ?? input.model_root);
+    this.positionTableRoot = buffer(input.positionTableRoot ?? input.position_table_root);
+    this.promptCommitment = buffer(input.promptCommitment ?? input.prompt_commitment);
+    this.registryEpoch = input.registryEpoch ?? input.registry_epoch ?? 0;
+    this.registry = buffer(input.registry);
+    this.registryTableRoot = buffer(input.registryTableRoot ?? input.registry_table_root);
+    this.familyBody = buffer(input.familyBody ?? input.family_body ?? new Uint8Array());
+  }
+
+  get runTerms(): RunTerms { return this.terms; }
+  get run_terms(): RunTerms { return this.terms; }
+  get position_count(): number { return this.positionCount; }
+  get segment_count(): number { return this.segmentCount; }
+  get family_count(): number { return this.familyCount; }
+  get total_entries(): Integer { return this.totalEntries; }
+  get compiler_version(): number { return this.compilerVersion; }
+  get clause12_v4(): Buffer { return this.clause12V4; }
+  get definition_sha256(): Buffer { return this.definitionSha256; }
+  get base_digests(): Buffer[] { return this.baseDigests; }
+  get model_root(): Buffer { return this.modelRoot; }
+  get position_table_root(): Buffer { return this.positionTableRoot; }
+  get prompt_commitment(): Buffer { return this.promptCommitment; }
+  get registry_epoch(): number { return this.registryEpoch; }
+  get registry_table_root(): Buffer { return this.registryTableRoot; }
+  get family_body(): Buffer { return this.familyBody; }
+
+  preimage(): Buffer {
+    const clause = this.clause12V4;
+    if (clause.length !== 43 || !sameBytes(clause.subarray(0, 5), Buffer.from([4, ...Buffer.from("PT2P", "ascii")]))) throw new Refusal(PLAN_BINDING);
+    const positions = readNumber(clause, 5, 4);
+    const segments = readNumber(clause, 9, 2);
+    const bodyCount = checkFamilyBody(this.familyBody);
+    if (positions !== this.positionCount || segments !== this.segmentCount || this.baseDigests.length !== 3 || bodyCount !== this.familyCount || Number(asBigInt(this.totalEntries)) <= 0 || this.positionCount < 1 || this.segmentCount < 1 || this.familyCount < 1 || this.familyCount > MAX_FAMILIES || this.segmentCount > MAX_SEGMENTS || isZero(this.modelRoot) || isZero(this.positionTableRoot) || isZero(this.promptCommitment)) throw new Refusal(PLAN_BINDING);
+    if (checkRunBindingV7(this.binding, { positionCount: this.positionCount }) !== 0) throw new Refusal(RUN_BINDING);
+    const out = Buffer.concat([DESCRIPTOR_DOMAIN_V7, uint(UNIFIED_VERSION_V7, 2), uint(STORAGE_ROOT_ONLY, 1), uint(COMMITMENT_VERSION, 1), uint(this.positionCount, 4), uint(this.segmentCount, 2), uint(this.familyCount, 2), uint(bitLength(add(this.positionCount, -1)), 1), uint(this.compilerVersion, 1), Buffer.alloc(2), uint(this.totalEntries, 8), this.terms.encode(), this.binding.encode(), clause, digest(this.definitionSha256), ...this.baseDigests.map((item) => digest(item)), digest(this.modelRoot), digest(this.positionTableRoot), digest(this.promptCommitment), uint(this.registryEpoch, 4), digest(this.registry), digest(this.registryTableRoot), sha256(this.familyBody)]);
+    if (out.length !== 679) throw new Error("descriptor v7 length");
+    return out;
+  }
+
+  digest(): Buffer { return sha256(this.preimage()); }
+}
+
+export { DescriptorSpecV7 as DescriptorSpec };
+
+export function descriptorPreimageV7(options: Omit<DescriptorSpecV7Input, "runTerms" | "run_terms"> & { runTerms?: RunTerms; run_terms?: RunTerms }): Buffer {
+  return new DescriptorSpecV7({ ...options, terms: options.terms ?? options.runTerms ?? options.run_terms as RunTerms }).preimage();
+}
+
+export const descriptor_preimage_v7 = descriptorPreimageV7;
+export const descriptorDigestV7 = (options: Parameters<typeof descriptorPreimageV7>[0]): Buffer => sha256(descriptorPreimageV7(options));
+export const descriptor_digest_v7 = descriptorDigestV7;
+
 export function familyCountFromBody(body: Uint8Array): number { return checkFamilyBody(body); }
 export const family_count_from_body = familyCountFromBody;
 
-export function encodeUnifiedInit(terms: DisputeTerms, binding: RunBinding, options: { modelRoot: Uint8Array; positionTableRoot: Uint8Array; promptCommitment: Uint8Array; familyBody: Uint8Array }): Buffer {
+export function encodeUnifiedInitV7(terms: RunTerms, binding: RunBinding, options: { modelRoot: Uint8Array; positionTableRoot: Uint8Array; promptCommitment: Uint8Array; familyBody: Uint8Array }): Buffer {
+  const familyCount = familyCountFromBody(options.familyBody);
+  if (checkRunBindingV7(binding) !== 0) throw new Refusal(RUN_BINDING);
+  if (isZero(options.modelRoot) || isZero(options.positionTableRoot) || isZero(options.promptCommitment)) throw new Refusal(PLAN_BINDING);
+  return Buffer.concat([Buffer.from([TAG_UNIFIED_INIT]), terms.encode(), binding.encode(), digest(options.modelRoot), digest(options.positionTableRoot), digest(options.promptCommitment), uint(familyCount, 2), options.familyBody]);
+}
+
+export const encode_unified_init_v7 = encodeUnifiedInitV7;
+
+export function encodeUnifiedInitV6(terms: DisputeTerms, binding: RunBinding, options: { modelRoot: Uint8Array; positionTableRoot: Uint8Array; promptCommitment: Uint8Array; familyBody: Uint8Array }): Buffer {
   const familyCount = familyCountFromBody(options.familyBody);
   if (isZero(options.modelRoot) || isZero(options.positionTableRoot) || isZero(options.promptCommitment)) throw new Refusal(PLAN_BINDING);
   return Buffer.concat([Buffer.from([TAG_UNIFIED_INIT]), terms.encode(), binding.encode(), digest(options.modelRoot), digest(options.positionTableRoot), digest(options.promptCommitment), uint(familyCount, 2), options.familyBody]);
+}
+
+export function encodeUnifiedInit(terms: DisputeTerms | RunTerms, binding: RunBinding, options: { modelRoot: Uint8Array; positionTableRoot: Uint8Array; promptCommitment: Uint8Array; familyBody: Uint8Array }): Buffer {
+  return terms instanceof RunTerms ? encodeUnifiedInitV7(terms, binding, options) : encodeUnifiedInitV6(terms, binding, options);
 }
 
 export const encode_unified_init = encodeUnifiedInit;
@@ -1499,16 +2329,20 @@ export function decodeTemplateSeal(raw: Uint8Array): { state: number; pt2s: Buff
 
 export const decode_template_seal = decodeTemplateSeal;
 
-export function encodeChallengeLeaf(descriptor: Uint8Array, position: number, segment: number, local: number, leaf: Uint8Array, path: readonly Uint8Array[], spp1: Uint8Array, responseLength: number, nonce: number): Buffer {
+export function encodeChallengeLeaf(descriptor: Uint8Array, position: number, segment: number, local: number, leaf: Uint8Array, path: readonly Uint8Array[], spp1: Uint8Array, nonce: number): Buffer {
   decodeSpp1(spp1);
   if (path.length > 255 || leaf.length !== 32) throw new Refusal(CL_MALFORMED);
-  return Buffer.concat([Buffer.from([TAG_CHALLENGE_LEAF]), digest(descriptor), uint(position, 4), uint(segment, 2), uint(local, 4), digest(leaf), uint(responseLength, 4), uint(path.length, 1), ...path.map((item) => digest(item)), spp1, uint(nonce, 4)]);
+  return Buffer.concat([Buffer.from([TAG_CHALLENGE_LEAF]), digest(descriptor), uint(position, 4), uint(segment, 2), uint(local, 4), digest(leaf), uint(path.length, 1), ...path.map((item) => digest(item)), spp1, uint(nonce, 4)]);
 }
 
 export const encode_challenge_leaf = encodeChallengeLeaf;
+export const encodeChallengeLeafV7 = encodeChallengeLeaf;
+export const encode_challenge_leaf_v7 = encodeChallengeLeaf;
 
-export function encodeChallengePosition(descriptor: Uint8Array, position: number, responseLength: number, nonce: number): Buffer { return Buffer.concat([Buffer.from([TAG_CHALLENGE_POSITION]), digest(descriptor), uint(position, 4), uint(responseLength, 4), uint(nonce, 4)]); }
+export function encodeChallengePosition(descriptor: Uint8Array, position: number, nonce: number): Buffer { return Buffer.concat([Buffer.from([TAG_CHALLENGE_POSITION]), digest(descriptor), uint(position, 4), uint(nonce, 4)]); }
 export const encode_challenge_position = encodeChallengePosition;
+export const encodeChallengePositionV7 = encodeChallengePosition;
+export const encode_challenge_position_v7 = encodeChallengePosition;
 
 export function encodeReveal(digests: readonly Uint8Array[], treeRoot?: Uint8Array): Buffer { return Buffer.concat([Buffer.from([TAG_REVEAL, digests.length]), treeRoot === undefined ? Buffer.alloc(0) : digest(treeRoot), ...digests.map((item) => digest(item))]); }
 export const encode_reveal = encodeReveal;
@@ -1548,13 +2382,78 @@ export function decodeSummaryAnswer(data: Uint8Array): { slot: number; preimage:
 
 export const decode_summary_answer = decodeSummaryAnswer;
 
-export function decodeChallengeRecord(raw: Uint8Array): { phase: number; winner: number; challenger: Buffer; executor: Buffer; descriptor: Buffer; responseLength: number; source: number; deadline: Integer; position: number; segment: number; bond: Integer; form: number } {
+export interface ChallengeRecordV7 {
+  phase: number;
+  winner: number;
+  challenger: Buffer;
+  executor: Buffer;
+  descriptor: Buffer;
+  local: number;
+  source: number;
+  machine: number;
+  deadline: Integer;
+  position: number;
+  segment: number;
+  bond: Integer;
+  readBits: bigint;
+  familyTableVerified: number;
+  familyTableStaged: number;
+  entry?: number;
+  form?: number;
+  positionStaged?: number;
+  positionSegmentCount?: number;
+  positionVerified?: number;
+  targetVerified?: number;
+  readCount?: number;
+  writeCount?: number;
+  customSettlementDeadline?: Integer;
+  rulingCause?: number;
+  [name: string]: Integer | Buffer | number | undefined;
+}
+
+export function decodeChallengeRecord(raw: Uint8Array): ChallengeRecordV7 {
   const bytes = buffer(raw);
   if (bytes.length !== DCR1_BYTES || !sameBytes(bytes.subarray(0, 4), Buffer.from("DCR1")) || !sameBytes(bytes.subarray(6, 8), uint(DCR1_VERSION, 2))) throw new Refusal(CL_MALFORMED);
-  return { phase: bytes[4], winner: bytes[5], challenger: bytes.subarray(8, 40), executor: bytes.subarray(40, 72), descriptor: bytes.subarray(72, 104), responseLength: readNumber(bytes, 140, 4), source: bytes[144], deadline: readInteger(bytes, 148, 8), position: readNumber(bytes, 156, 4), segment: readNumber(bytes, 160, 2), bond: readInteger(bytes, 162, 8), form: readNumber(bytes, 174, 2) };
+  if (!sameBytes(bytes.subarray(140, 144), Buffer.alloc(4)) || ![0, 1, 2].includes(bytes[145]) || !sameBytes(bytes.subarray(146, 148), Buffer.alloc(2)) || ![1, 2].includes(bytes[144])) throw new Refusal(CL_MALFORMED);
+  const phase = bytes[4];
+  const result: ChallengeRecordV7 = {
+    phase,
+    winner: bytes[5],
+    challenger: bytes.subarray(8, 40),
+    executor: bytes.subarray(40, 72),
+    descriptor: bytes.subarray(72, 104),
+    local: readNumber(bytes, 136, 4),
+    source: bytes[144],
+    machine: bytes[145],
+    deadline: readInteger(bytes, 148, 8),
+    position: readNumber(bytes, 156, 4),
+    segment: readNumber(bytes, 160, 2),
+    bond: readInteger(bytes, 162, 8),
+    readBits: readBigInt(bytes, 348, 8) | (readBigInt(bytes, 396, 8) << 64n),
+    familyTableVerified: bytes[3072],
+    familyTableStaged: readNumber(bytes, 3074, 2),
+  };
+  if (phase === PHASE_RULED || phase === PHASE_SETTLED) {
+    const cause = bytes[RULING_CAUSE_AT];
+    if (![CAUSE_VERDICT, CAUSE_CONVICT, CAUSE_TIMEOUT].includes(cause)) throw new Refusal(CL_MALFORMED);
+    result.customSettlementDeadline = readInteger(bytes, CUSTOM_SETTLEMENT_DEADLINE_AT, 8);
+    result.rulingCause = cause;
+  } else {
+    result.entry = readNumber(bytes, 170, 4);
+    result.form = readNumber(bytes, 174, 2);
+    result.positionStaged = readNumber(bytes, 176, 2);
+    result.positionSegmentCount = readNumber(bytes, 178, 2);
+    result.positionVerified = bytes[180];
+    result.targetVerified = bytes[176];
+    result.readCount = readNumber(bytes, 178, 2);
+    result.writeCount = readNumber(bytes, 180, 2);
+  }
+  return result;
 }
 
 export const decode_challenge_record = decodeChallengeRecord;
+export const decodeChallengeRecordV7 = decodeChallengeRecord;
+export const decode_challenge_record_v7 = decodeChallengeRecord;
 
 export function legacyTxBytes(dataLen: number, options: { keys: number; instructionAccounts: number; signatures?: number; extraInstructions?: readonly (readonly [number, number])[] }): number {
   const compact = (value: number): number => value < 0x80 ? 1 : value < 0x4000 ? 2 : 3;

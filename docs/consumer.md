@@ -2,11 +2,11 @@
 
 A consumer reads a DCG result and decides whether it belongs to its request. A consumer does not need to run the executor or join a challenge.
 
-This guide follows **DCG unified document format v1, specification revision 6**. It is a testnet alpha. The program address and result-reader SDK are placeholders in the [quickstart](quickstart.md).
+This guide follows **DCG unified document format v1, specification revision 7**. It is a mainnet alpha. The program addresses are in the [quickstart](quickstart.md).
 
 ## 1. Find the result account
 
-DCG results are durable DCR2 v4 accounts. Each address is derived from the document descriptor:
+Retained DCG results are DCR2 v5 accounts. Each address is derived from the document descriptor:
 
 ```text
 DCR2 = PDA("dcg-hcl-result", descriptor)
@@ -21,25 +21,27 @@ Do not use a transaction index, display label, or executor-provided URL as the r
 Before decoding, verify:
 
 - the account owner is the deployed re-key DCG program;
-- the data starts with `DCR2` version 4;
+- the data starts with `DCR2` version 5;
 - the data length is exactly:
 
 ```text
-264 + output_count × output_width + ceil(output_count / 8)
+336 + output_count × output_width + ceil(output_count / 8)
 ```
 
 - the account data has no trailing bytes;
 - the descriptor matches the bound document;
 - the request ID and consumer digest match the request.
 
-A closed document drains DCM2, DPR2, and DFS2. It does not drain DCR2. A consumer should normally read only DCR2 after close.
+A DCRZ tombstone is not a result. Reject it even though it retains the descriptor, executor, and retention timestamps.
+
+A closed document drains DCM2, DPR2, and DFS2. It does not immediately drain DCR2. A consumer should normally read only DCR2 after close, until tag 185 replaces it with DCRZ.
 
 ## 3. Check the request binding
 
 Recompute the Tier C `TRQ1` block from the request policy:
 
 ```text
-consumer_digest = SHA256("basanos/tierc-request/1" || TRQ1)
+consumer_digest = SHA256("basanos/tierc-request/2" || TRQ1)
 ```
 
 Then compare:
@@ -51,9 +53,9 @@ Then compare:
 | `executor` | The executor selected by the bind or fulfil policy |
 | `output_count` | Request's `max_new_tokens` |
 | `output_width` | The tokenizer output format committed by the plan |
-| `dispute_terms` | The request's DDT1 |
+| `run_terms` | The request's DDT2 |
 
-The descriptor is the hash of the full DPD2 preimage. Recompute it when the consumer has the sealed plan, registry, model anchors, prompt commitment, DDT1, and DRB1. A matching request ID alone is not enough.
+The descriptor is the hash of the full DPD2 preimage. Recompute it when the consumer has the sealed plan, registry, model anchors, prompt commitment, DDT2, and DRB1. A matching request ID alone is not enough.
 
 If the request is a direct DCG run with no consumer, both request ID and consumer digest are zero. Do not apply the Tier C checks to that record.
 
@@ -70,13 +72,15 @@ For `FINAL` or `SETTLED`, read these fields:
 
 | Field | Check |
 |---|---|
-| `closed` | `0` or `1`; both are readable. |
+| `document_closed` | `0` or `1`; both are readable while the account is DCR2 v5. |
 | `document_root` | Nonzero. |
 | `finalize_slot` | Nonzero. |
 | `dispute_deadline` | Nonzero. |
 | `open_challenges` | Read from DCM2 before close, or trust `FINAL`/`SETTLED` after close. |
 | `outputs_attested` | Exactly `output_count`. |
 | attested bitmap | Every output bit is set. |
+| `retention_start_slot` | Zero before close, then the `CloseDocumentV5` slot. |
+| `retention_deadline` | `retention_start_slot + retention_slots` after close. |
 
 The result may still read `PENDING` just after a challenger wins. The ruling changes DCM2 at once, but DCR2 changes on the next resolve or close. `PENDING` is never usable, so this delay is safe.
 
@@ -117,7 +121,7 @@ A consumer must not:
 - treat `PENDING` as a fallback answer;
 - use `REFUTED` outputs;
 - use a result whose request binding differs;
-- infer success from a DLE1 event without reading DCR2;
+- infer success from a DLE1 version 2 event without reading DCR2;
 - use executor-provided output bytes instead of the DCR2 output area.
 
 ## 7. Optional permissionless actions
@@ -149,7 +153,13 @@ Tag **172, `CloseDocumentV5`** uses:
 - `DCM2`, `DPR2`, `DFS2`, and `DCR2` (writable);
 - executor (writable).
 
-For a finalized, unrefuted document, every output must be attested. A refuted document may close. Closing returns document rent to the executor and keeps DCR2.
+For a finalized, unrefuted document, every output must be attested. A refuted document may close. Closing starts result retention and returns all working-account lamports and any held executor bond to the executor. DCR2 v5 remains until tag 185 retires it.
+
+### Retire the retained result
+
+At or after `retention_deadline`, anyone may send tag **185, `CloseResultV6`**. It uses any signer, writable DCR2, and the writable executor. It replaces DCR2 v5 with a 96-byte DCRZ tombstone, destroys the outputs and bitmap, and returns every lamport above the tombstone's rent-exempt minimum to the executor. It refuses before the deadline. No scheduler closes the result automatically, and a consumer must reject DCRZ.
+
+Settlement does not change result acceptance. Tag 131 always pays the record bond to the ruling winner. Its built-in route uses seven accounts and, on the first settled challenger win, pays the configured share of the executor-bond pot to the winner and the exact remainder to the incinerator; the loser receives none. A committed nonzero program selects the eleven-account custom route and an exact BSS1 CPI, then must pay the entire escrow. At the custom-settlement deadline, DCG uses the built-in payout as a fallback with the eleven-account list. A mismatch returns 798.
 
 ## Deadlines
 
@@ -158,20 +168,23 @@ For a finalized, unrefuted document, every output must be attested. A refuted do
 | Tier C request deadline | Follow the application request policy. It does not define DCG finality. |
 | DCG challenge deadline | Wait for a usable DCR2 status; do not infer finality from elapsed time alone. |
 | Response-round deadlines | Watch only if acting as a watcher or challenger. A consumer can wait. |
+| Custom-settlement deadline | Relevant only to challenge settlement. The built-in payout is used at or after it. |
+| Result-retention deadline | The DCR2 v5 record may be replaced with DCRZ at or after it. |
 
-A consumer can read a closed `SETTLED` result at any later time. The record is designed to remain.
+A consumer can read a closed `SETTLED` DCR2 v5 result until someone calls tag 185. The record is not removed automatically, but a consumer must not assume that it will remain a result indefinitely.
 
 ## What can go wrong
 
 - **Wrong program or version:** another account can imitate the `DCR2` prefix. Check owner, version, exact length, and descriptor.
-- **Wrong request:** the request ID, consumer digest, executor, output count, or DDT1 differs.
+- **Wrong request:** the request ID, consumer digest, executor, output count, or DDT2 differs.
 - **Pending result:** the deadline has not passed, a challenge is open, or outputs are missing.
 - **Refuted result:** at least one challenger won. Do not use it.
 - **Missing bitmap bit:** the output area is not usable yet.
 - **Wrong token decode:** the output width or tokenizer policy does not match the request.
 - **Multiple bound results:** Tier C policy, not DCG, chooses which executor to pay or fulfil.
-- **DCM2 is gone:** this is normal after document close. Use the durable DCR2 record.
+- **DCM2 is gone:** this is normal after document close. Use DCR2 while it remains DCR2 v5.
+- **DCRZ found:** the result was retired. Reject it; do not decode it as an empty result.
 - **Event says resolve but state does not:** the transaction may have failed. Read the account again.
-- **Old SDK layout:** revision 6 uses DCR2 v4. Reject v2 and v3 records on this interface.
+- **Old SDK layout:** revision 7 uses DCR2 v5. Reject other record versions and DCRZ on this interface.
 
 See the [generated reference](reference.md) for exact DCR2 fields, address seeds, tags, events, and errors.

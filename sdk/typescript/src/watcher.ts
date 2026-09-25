@@ -81,14 +81,14 @@ export class Watcher {
     return c.addresses(this.accounts.dcgProgram, { descriptor, pt2s: this.accounts.pt2s.toBytes(), pt2sSha256: this.accounts.pt2sSha256, challenger: options.challenger, nonce: options.nonce ?? 0, registry: this.accounts.registry.toBytes(), positionCount: options.positionCount });
   }
 
-  async readDocument(descriptor: Uint8Array): Promise<c.Dcm2V5> {
+  async readDocument(descriptor: Uint8Array): Promise<c.Dcm2V6> {
     const value = requiredPda(this.book(descriptor).document, "document");
     const account = await this.rpc.readAccount(value[0]);
     if (account === null) throw new Error("document account is absent");
-    return c.Dcm2V5.decode(account.data);
+    return c.Dcm2V6.decode(account.data);
   }
 
-  async read_document(descriptor: Uint8Array): Promise<c.Dcm2V5> { return this.readDocument(descriptor); }
+  async read_document(descriptor: Uint8Array): Promise<c.Dcm2V6> { return this.readDocument(descriptor); }
 
   async positions(descriptor: Uint8Array): Promise<Buffer[]> {
     const value = requiredPda(this.book(descriptor).positions, "positions");
@@ -111,30 +111,30 @@ export class Watcher {
 
   pick_sample(descriptor: Uint8Array, positionCount: number, nonce = 0): number { return this.pickSample(descriptor, positionCount, nonce); }
 
-  openPosition(descriptor: Uint8Array, challenger: KeyLike, position: number, options: { responseLength: number; nonce: number }): ChallengeHandle {
+  openPosition(descriptor: Uint8Array, challenger: KeyLike, position: number, options: { nonce: number }): ChallengeHandle {
     const who = c.keyBytes(challenger);
     const book = this.book(descriptor, { challenger: who, nonce: options.nonce });
     const record = requiredPda(book.challenge, "challenge");
-    const data = c.encodeChallengePosition(descriptor, position, options.responseLength, options.nonce);
-    const instruction = ix.challengePosition(this.accounts.dcgProgram, record[0], who, requiredPda(book.document, "document")[0], requiredPda(book.positions, "positions")[0], this.accounts.pt2s, this.accounts.routes, this.accounts.geometry, this.accounts.registry, descriptor, position, options.responseLength, options.nonce);
+    const data = c.encodeChallengePosition(descriptor, position, options.nonce);
+    const instruction = ix.challengePosition(this.accounts.dcgProgram, record[0], who, requiredPda(book.document, "document")[0], requiredPda(book.positions, "positions")[0], this.accounts.pt2s, this.accounts.routes, this.accounts.geometry, this.accounts.registry, descriptor, position, options.nonce);
     return { descriptor: c.buffer(descriptor), record: record[0].toBytes(), nonce: options.nonce, position, instruction, response: requiredPda(book.response, "response")[0].toBytes() };
   }
 
-  open_position(descriptor: Uint8Array, challenger: KeyLike, position: number, options: { response_length: number; nonce: number }): ChallengeHandle {
-    return this.openPosition(descriptor, challenger, position, { responseLength: options.response_length, nonce: options.nonce });
+  open_position(descriptor: Uint8Array, challenger: KeyLike, position: number, options: { nonce: number }): ChallengeHandle {
+    return this.openPosition(descriptor, challenger, position, options);
   }
 
-  openLeaf(descriptor: Uint8Array, challenger: KeyLike, options: { position: number; segment: number; local: number; leaf: Uint8Array; path: readonly Uint8Array[]; spp1: Uint8Array; responseLength: number; nonce: number }): ChallengeHandle {
+  openLeaf(descriptor: Uint8Array, challenger: KeyLike, options: { position: number; segment: number; local: number; leaf: Uint8Array; path: readonly Uint8Array[]; spp1: Uint8Array; nonce: number }): ChallengeHandle {
     const who = c.keyBytes(challenger);
     const book = this.book(descriptor, { challenger: who, nonce: options.nonce });
     const record = requiredPda(book.challenge, "challenge");
-    const data = c.encodeChallengeLeaf(descriptor, options.position, options.segment, options.local, options.leaf, options.path, options.spp1, options.responseLength, options.nonce);
+    const data = c.encodeChallengeLeaf(descriptor, options.position, options.segment, options.local, options.leaf, options.path, options.spp1, options.nonce);
     const instruction = ix.challengeLeaf(this.accounts.dcgProgram, record[0], who, requiredPda(book.document, "document")[0], requiredPda(book.positions, "positions")[0], this.accounts.pt2s, this.accounts.routes, this.accounts.geometry, this.accounts.registry, this.accounts.pt1s, data);
     return { descriptor: c.buffer(descriptor), record: record[0].toBytes(), nonce: options.nonce, position: options.position, instruction, response: requiredPda(book.response, "response")[0].toBytes() };
   }
 
-  open_leaf(descriptor: Uint8Array, challenger: KeyLike, options: { position: number; segment: number; local: number; leaf: Uint8Array; path: readonly Uint8Array[]; spp1: Uint8Array; response_length: number; nonce: number }): ChallengeHandle {
-    return this.openLeaf(descriptor, challenger, { ...options, responseLength: options.response_length });
+  open_leaf(descriptor: Uint8Array, challenger: KeyLike, options: { position: number; segment: number; local: number; leaf: Uint8Array; path: readonly Uint8Array[]; spp1: Uint8Array; nonce: number }): ChallengeHandle {
+    return this.openLeaf(descriptor, challenger, options);
   }
 
   revealPosition(handle: ChallengeHandle, executor: KeyLike, first: number, roots: readonly Uint8Array[]): TransactionInstruction {
@@ -158,11 +158,13 @@ export class Watcher {
 
   close_response(handle: ChallengeHandle, executor: KeyLike): TransactionInstruction { return this.closeResponse(handle, executor); }
 
-  async settle(handle: ChallengeHandle, winner: KeyLike, challenger: KeyLike, executor?: KeyLike): Promise<TransactionInstruction> {
+  async settle(handle: ChallengeHandle, winner: KeyLike, challenger: KeyLike, executor?: KeyLike, settlement?: { program: KeyLike; result?: KeyLike; systemProgram?: KeyLike }): Promise<TransactionInstruction> {
     const response = handle.response.length === 0 ? c.pda(this.accounts.dcgProgram, c.RESPONSE_SEED, handle.record)[0] : new PublicKey(handle.response);
     const resolvedExecutor = executor ?? (await this.readChallenge(handle.record)).executor;
     const book = this.book(handle.descriptor);
-    return ix.settle(this.accounts.dcgProgram, handle.record, response, winner, resolvedExecutor, requiredPda(book.document, "document")[0], challenger);
+    if (settlement === undefined) return ix.settle(this.accounts.dcgProgram, handle.record, response, winner, resolvedExecutor, requiredPda(book.document, "document")[0], challenger);
+    const escrow = c.settlementEscrowAddress(this.accounts.dcgProgram, handle.record)[0];
+    return ix.settleCustom(this.accounts.dcgProgram, handle.record, response, winner, resolvedExecutor, requiredPda(book.document, "document")[0], challenger, settlement.program, escrow, settlement.result ?? requiredPda(book.result, "result")[0], settlement.systemProgram ?? c.SYSTEM_PROGRAM);
   }
 
   private fixpointAccounts(): ix.AccountSpec[] {
@@ -174,7 +176,7 @@ export class Watcher {
     const result: TransactionInstruction[] = [];
     for (const round of rounds) {
       const fixpoint = round.fixpoint ? this.fixpointAccounts() : undefined;
-      result.push(ix.revealDescent(this.accounts.dcgProgram, handle.record, executor, requiredPda(book.document, "document")[0], round.descendants, round.treeRoot, { fixpointAccounts: fixpoint }));
+      result.push(ix.revealDescent(this.accounts.dcgProgram, handle.record, executor, requiredPda(book.document, "document")[0], round.descendants, round.treeRoot, { fixpointAccounts: fixpoint, documentWritable: round.fixpoint }));
       result.push(ix.descend(this.accounts.dcgProgram, handle.record, challenger, requiredPda(book.document, "document")[0], round.choice, { fixpointAccounts: fixpoint, documentWritable: round.fixpoint }));
     }
     return result;

@@ -1,10 +1,10 @@
-# Basanos developer kit
+# Baranos developer kit
 
-Basanos is a research protocol for committing to a fixed model computation before execution and making the resulting trajectory independently challengeable. This repository provides standalone Python and TypeScript SDKs and builder guides for that interface.
+Baranos is a research protocol for committing to a fixed model computation before execution and making the resulting trajectory independently challengeable. This repository provides standalone Python and TypeScript SDKs and builder guides for that interface.
 
-## Testnet alpha
+## Mainnet alpha
 
-This is a **testnet alpha**. No assets are at stake in the builder trial. **Uptime and latency: nothing guaranteed.** Requests may wait, sometimes for a long time; they are not lost, and verification does not depend on us.
+This is a **mainnet alpha** on Fogo: transactions spend real FOGO. **Uptime and latency: nothing guaranteed.** Requests may wait, sometimes for a long time; they are not lost, and verification does not depend on us.
 
 ## Quickstart
 

@@ -333,14 +333,18 @@ export class RpcClient {
     if (meta?.err !== undefined && meta.err !== null) return [];
     const logs = Array.isArray(meta?.logMessages) ? meta.logMessages.map((item) => String(item)) : [];
     const programText = program === undefined ? undefined : c.key(program).toBase58();
-    let currentProgram: string | undefined;
+    const stack: string[] = [];
     const events: Array<Record<string, c.Integer | Buffer | string>> = [];
     for (const line of logs) {
-      if (line.startsWith("Program ") && line.includes(" invoke [")) currentProgram = line.split(/\s+/)[1];
+      if (line.startsWith("Program ") && line.includes(" invoke [")) stack.push(line.split(/\s+/)[1]);
+      if (line.startsWith("Program ") && (line.includes(" success") || line.includes(" failed:"))) {
+        if (stack.length > 0) stack.pop();
+      }
       if (!line.includes("Program data:")) continue;
+      const currentProgram = stack.at(-1);
       if (programText !== undefined && currentProgram !== programText) continue;
       const encoded = line.slice(line.indexOf("Program data:") + "Program data:".length).trim();
-      try { events.push(c.decodeEvent(Buffer.from(encoded, "base64"))); } catch { void 0; }
+      try { events.push(c.decodeEventAny(Buffer.from(encoded, "base64"))); } catch { void 0; }
     }
     return events;
   }
