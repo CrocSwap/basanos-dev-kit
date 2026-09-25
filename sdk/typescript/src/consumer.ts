@@ -53,7 +53,8 @@ export class Consumer {
 }
 
 export function decodeToken(value: Uint8Array, vocab: number): number {
-  if (value.length !== 16 || !value.subarray(0, 8).every((item) => item === 0)) throw new Error(String(c.OUTPUT_PROOF));
+  // Bytes 0..8 hold the argmax best score (i64); only the token at 8..16 is the output.
+  if (value.length !== 16) throw new Error(String(c.OUTPUT_PROOF));
   const raw = Buffer.from(value.subarray(8, 16)).readBigUInt64LE(0);
   const token = BigInt.asIntN(64, raw);
   if (token < 0n || token >= BigInt(vocab)) throw new Error(String(c.OUTPUT_PROOF));

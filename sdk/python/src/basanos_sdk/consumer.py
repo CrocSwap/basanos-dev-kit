@@ -54,7 +54,8 @@ class Consumer:
 
 
 def decode_token(value: bytes, vocab: int) -> int:
-    if len(value) != 16 or value[:8] != bytes(8):
+    # Bytes 0..8 hold the argmax best score (i64); only the token at 8..16 is the output.
+    if len(value) != 16:
         raise ValueError(c.OUTPUT_PROOF)
     token = int.from_bytes(value[8:16], "little", signed=True)
     if not 0 <= token < vocab:

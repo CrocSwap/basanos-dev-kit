@@ -117,3 +117,10 @@ def test_request_program_matches_npr_instruction_bytes_and_tcr1() -> None:
     assert decoded.request.encode() == trq1 and decoded.machine.encode() == machine_raw
     with pytest.raises(ValueError):
         RequestAccount.decode(account[:-1])
+
+
+def test_decode_token_ignores_the_best_score_word():
+    # A real mainnet NPR output: best score 0x18887 in bytes 0..8, token 27775 in bytes 8..16.
+    from basanos_sdk.consumer import decode_token
+    value = bytes.fromhex("87880100000000007f6c000000000000")
+    assert decode_token(value, 248320) == 27775
