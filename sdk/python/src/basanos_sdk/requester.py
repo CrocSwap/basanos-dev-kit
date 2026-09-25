@@ -145,7 +145,8 @@ class RequestBlockV7:
 
     def validate(self) -> None:
         zero = bytes(32)
-        if (self.sampler_form != SAMPLER_GREEDY or self.sampling_params != zero or self.seed != zero
+        if (self.sampler_form != SAMPLER_GREEDY or len(self.sampling_params) != 32
+                or any(self.sampling_params[4:]) or self.seed != zero
                 or self.prompt_token_count < 1 or self.max_new_tokens < 1 or self.tokenizer_sha256 == zero
                 or self.request == zero or self.requester == zero or self.prompt_commitment == zero
                 or len(self.prompt_tokens_sha256) != 32 or len(self.machine_id) != 32

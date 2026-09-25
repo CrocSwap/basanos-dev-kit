@@ -1,6 +1,7 @@
 export * as consensus from "./consensus.js";
 export * as instructions from "./instructions.js";
 export * as requester from "./requester.js";
+export * as requestProgram from "./request_program.js";
 export * as watcher from "./watcher.js";
 export * as consumer from "./consumer.js";
 export * as transport from "./transport.js";
@@ -311,9 +312,31 @@ export {
   requestAddress,
 } from "./requester.js";
 
+export {
+  MACHINE_BYTES,
+  MACHINE_DOMAIN,
+  PROMPT_SEED,
+  REQUEST_BYTES,
+  RequestAccount,
+  RequestMachine,
+  RequestProgram,
+  RequestProgramClient,
+  STATUS_BOUND,
+  STATUS_OPEN,
+  STATUS_RESOLVED,
+  TAG_APPEND_PROMPT,
+  TAG_BIND_DOCUMENT,
+  TAG_CREATE_REQUEST,
+  TAG_RESOLVE,
+  configAddress,
+  decodeRequestAccount,
+  promptAddress,
+} from "./request_program.js";
+
 export { ChallengeHandle, DescentRound, Watcher, WatcherAccounts } from "./watcher.js";
 export { Consumer, ConsumerView, decodeToken, tokenValue, usableTokens } from "./consumer.js";
 export { Account, Confirmation, RpcBodyTooLarge, RpcClient, RpcError, SendReceipt, loadKeypair, signer, signerPubkey } from "./transport.js";
 export type { AccountSpec, KeyLike, Meta, SettlementOptions } from "./instructions.js";
 export type { RequestBlockV7Options, RequestBlockV7Input } from "./requester.js";
+export type { CreateRequestOptions, RequestMachineInput } from "./request_program.js";
 export type { RunTermsInput, ResultV5Input, Dcm2V6Input } from "./consensus.js";

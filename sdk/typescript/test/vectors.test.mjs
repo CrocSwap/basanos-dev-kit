@@ -9,6 +9,7 @@ import * as sdk from "../dist/index.js";
 
 const repo = path.resolve(new URL("../../..", import.meta.url).pathname);
 const golden = JSON.parse(fs.readFileSync(path.join(repo, "vectors/dcg/unified_v7.json"), "utf8"));
+const nprGolden = JSON.parse(fs.readFileSync(path.join(repo, "tests/golden/tierc/npr_request_program.json"), "utf8"));
 const bytes = (value) => Buffer.from(value, "hex");
 const terms = (custom = false) => {
   const value = { ...golden.ddt2[custom ? "custom" : "default"] };
@@ -188,6 +189,54 @@ test("requester v7 block, digest, and run binding are stable", () => {
   assert.equal(run.outputFirstPosition, 29);
   assert.equal(run.outputCount, 2);
   assert.equal(run.encode().subarray(0, 4).toString("ascii"), "DRB1");
+});
+
+function assertNprInstruction(instruction, expected) {
+  assert.equal(Buffer.from(instruction.data).toString("hex"), expected.data);
+  assert.deepEqual(instruction.keys.map((meta) => [meta.pubkey.toBase58(), meta.isSigner, meta.isWritable]), expected.metas);
+}
+
+test("request program matches NPR instruction bytes and TCR1", () => {
+  const create = bytes(nprGolden["request:create"].data);
+  const trq1 = create.subarray(1, 377);
+  const machineRaw = create.subarray(377, 761);
+  const request = new sdk.RequestBlockV7({
+    request: trq1.subarray(8, 40), requester: trq1.subarray(40, 72), nonce: Number(trq1.readBigUInt64LE(72)),
+    promptTokenCount: trq1.readUInt32LE(80), maxNewTokens: trq1.readUInt32LE(84), promptCommitment: trq1.subarray(88, 120),
+    promptTokensSha256: trq1.subarray(120, 152), tokenizerSha256: trq1.subarray(152, 184), samplingParams: trq1.subarray(184, 216),
+    seed: trq1.subarray(216, 248), machineId: trq1.subarray(248, 280), terms: sdk.RunTerms.decode(trq1.subarray(280, 376)),
+  });
+  const machine = sdk.RequestMachine.decode(machineRaw);
+  const client = new sdk.RequestProgramClient("HdZX3FLaKhzXpoyhiwrHU6FKVtY1ySPRJcGR3GAxAfz2");
+  assert.equal(request.samplingParams.some((value) => value !== 0), true);
+  assertNprInstruction(client.createRequest(request, machine, { deadlineSlots: create.readBigUInt64LE(761) }), nprGolden["request:create"]);
+  for (const label of ["request:prompt:0", "request:prompt:200", "request:prompt:400"]) {
+    const expected = nprGolden[label];
+    const data = bytes(expected.data);
+    const tokens = [];
+    for (let at = 5; at < data.length; at += 4) tokens.push(data.readUInt32LE(at));
+    assertNprInstruction(client.appendPrompt(expected.metas[0][0], expected.metas[1][0], data.readUInt32LE(1), tokens), expected);
+  }
+  const bind = nprGolden["request:bind"].metas;
+  assertNprInstruction(client.bindDocument(bind[0][0], bind[1][0], bind[2][0], bind[3][0], bind[4][0], bind[6][0], bind[7][0], bind[8][0]), nprGolden["request:bind"]);
+  const resolve = nprGolden["request:resolve"].metas;
+  assertNprInstruction(client.resolve(resolve[0][0], resolve[1][0], resolve[2][0]), nprGolden["request:resolve"]);
+  const account = Buffer.alloc(sdk.REQUEST_BYTES);
+  account.write("TCR1", 0, "ascii");
+  account.writeUInt16LE(1, 4);
+  request.requester.copy(account, 8);
+  account.writeBigUInt64LE(BigInt(request.nonce), 40);
+  account.writeBigUInt64LE(10n, 48);
+  account.writeBigUInt64LE(1_000_010n, 56);
+  request.consumerDigest().copy(account, 64);
+  trq1.copy(account, 96);
+  machineRaw.copy(account, 472);
+  Buffer.from(client.promptAddress(request.request)[0].toBytes()).copy(account, 856);
+  account[7] = client.requestAddress(request.requester, request.nonce)[1];
+  const decoded = sdk.RequestAccount.decode(account);
+  assert.equal(decoded.request.encode().equals(trq1), true);
+  assert.equal(decoded.machine.encode().equals(machineRaw), true);
+  assert.throws(() => sdk.RequestAccount.decode(account.subarray(0, -1)));
 });
 
 test("token helpers enforce the usable v5 result gate", () => {

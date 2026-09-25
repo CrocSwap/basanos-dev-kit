@@ -284,7 +284,7 @@ export class RequestBlockV7 {
 
   validate(): void {
     const zero = new Uint8Array(32);
-    if (this.samplerForm !== SAMPLER_GREEDY || !this.samplingParams.equals(zero) || !this.seed.equals(zero) || this.promptTokenCount < 1 || this.maxNewTokens < 1 || this.tokenizerSha256.equals(zero) || this.request.equals(zero) || this.requester.equals(zero) || this.promptCommitment.equals(zero) || this.promptTokensSha256.length !== 32 || this.machineId.length !== 32 || c.checkRunTerms(this.terms) !== 0) throw new Error("malformed TRQ1 v7");
+    if (this.samplerForm !== SAMPLER_GREEDY || this.samplingParams.length !== 32 || this.samplingParams.subarray(4).some((value) => value !== 0) || !this.seed.equals(zero) || this.promptTokenCount < 1 || this.maxNewTokens < 1 || this.tokenizerSha256.equals(zero) || this.request.equals(zero) || this.requester.equals(zero) || this.promptCommitment.equals(zero) || this.promptTokensSha256.length !== 32 || this.machineId.length !== 32 || c.checkRunTerms(this.terms) !== 0) throw new Error("malformed TRQ1 v7");
     c.uint(this.nonce, 8);
   }
 

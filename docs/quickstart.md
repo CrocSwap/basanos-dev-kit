@@ -41,18 +41,18 @@ Mainnet alpha addresses:
 
 The steps below use these SDK entries:
 
-| Placeholder | Purpose |
+| SDK entry | Purpose |
 |---|---|
-| `<CREATE_TIER_C_REQUEST>` | Create the request and return its request ID and consumer digest. |
-| `<BUILD_UNIFIED_INIT>` | Build the revision-7 `DDT2`, `DRB1`, descriptor, and instruction data. |
-| `<LAND_POSITION_ROOTS>` | Encode batches of position roots. |
-| `<ATTEST_OUTPUTS>` | Build proof-carrying `AttestOutputV5` data. |
-| `<FINALIZE_DOCUMENT>` | Build `FinalizeDocumentV5` with the family roots. |
-| `<WATCH_DOCUMENT>` | Read DLE1 version 2 events and the v6 document and v5 result accounts. |
-| `<READ_RESULT>` | Decode a DCR2 v5 result and reject DCRZ. |
-| `<RESOLVE_RESULT>` | Build `ResolveResultV5`. |
-| `<CLOSE_DOCUMENT>` | Build `CloseDocumentV5`. |
-| `<CLOSE_RESULT>` | Build `CloseResultV6` for use at or after the retention deadline. |
+| Python `basanos_sdk.RequestProgramClient.create_request`<br>TypeScript `RequestProgramClient.createRequest` | Create the request and return its request ID and consumer digest. |
+| Python `Requester.document_plan(...).init`<br>TypeScript `Requester.documentPlan(...).init` | Build the revision-7 `DDT2`, `DRB1`, descriptor, and instruction data. |
+| Python `Requester.document_plan(...).landing`<br>TypeScript `Requester.documentPlan(...).landing` | Encode batches of position roots. |
+| Python `consensus.encode_attestation(...)` + `Requester.attest_output(...)`<br>TypeScript `consensus.encodeAttestation(...)` + `Requester.attestOutput(...)` | Build proof-carrying `AttestOutputV5` data. |
+| Python `Requester.document_plan(...).finalize`<br>TypeScript `Requester.documentPlan(...).finalize` | Build `FinalizeDocumentV5` with the family roots. |
+| Python `Watcher.read_document(...)`, `Watcher.events(...)`, `Requester.read_result(...)`<br>TypeScript `Watcher.readDocument(...)`, `Watcher.events(...)`, `Requester.readResult(...)` | Read DLE1 version 2 events and the v6 document and v5 result accounts. |
+| Python `Requester.read_result(descriptor)`<br>TypeScript `Requester.readResult(descriptor)` | Decode a DCR2 v5 result and reject DCRZ. |
+| Python `Requester.resolve(...)`<br>TypeScript `Requester.resolve(...)` | Build `ResolveResultV5`. |
+| Python `instructions.close_document(...)`<br>TypeScript `instructions.closeDocument(...)` | Build `CloseDocumentV5`. |
+| Python `instructions.close_result(...)`<br>TypeScript `instructions.closeResult(...)` | Build `CloseResultV6` for use at or after the retention deadline. |
 
 The exact package names and arguments will be filled in at deploy. Do not guess them from the old DCG examples.
 
