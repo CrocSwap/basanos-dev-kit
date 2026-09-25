@@ -1133,13 +1133,26 @@ def decode_challenge_record(raw: bytes) -> dict[str, Any]:
         "challenger": raw[8:40],
         "executor": raw[40:72],
         "descriptor": raw[72:104],
+        "leaf": raw[104:136],
+        "local": int.from_bytes(raw[136:140], "little"),
         "response_length": int.from_bytes(raw[140:144], "little"),
         "source": raw[144],
         "deadline": int.from_bytes(raw[148:156], "little"),
         "position": int.from_bytes(raw[156:160], "little"),
         "segment": int.from_bytes(raw[160:162], "little"),
         "bond": int.from_bytes(raw[162:170], "little"),
+        "entry": int.from_bytes(raw[170:174], "little"),
         "form": int.from_bytes(raw[174:176], "little"),
+        "position_staged": int.from_bytes(raw[176:178], "little"),
+        "position_segment_count": int.from_bytes(raw[178:180], "little"),
+        "position_verified": raw[180],
+        "target_verified": raw[176],
+        "read_count": int.from_bytes(raw[178:180], "little"),
+        "write_count": int.from_bytes(raw[180:182], "little"),
+        "read_bits": int.from_bytes(raw[348:356], "little")
+        | int.from_bytes(raw[396:404], "little") << 64,
+        "family_table_verified": raw[3072],
+        "family_table_staged": int.from_bytes(raw[3074:3076], "little"),
     }
 
 

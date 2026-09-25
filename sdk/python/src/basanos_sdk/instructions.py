@@ -177,8 +177,10 @@ def select_segment(program: KeyLike, record: KeyLike, challenger: KeyLike, docum
 
 def reveal_descent(program: KeyLike, record: KeyLike, signer: KeyLike, document: KeyLike,
                    descendants: Sequence[bytes], tree_root: bytes | None = None, *,
-                   fixpoint_accounts: Sequence[tuple[KeyLike, bool, bool]] | None = None) -> Instruction:
-    accounts: list[tuple[KeyLike, bool, bool]] = [(record, False, True), (signer, True, False), (document, False, False)]
+                   fixpoint_accounts: Sequence[tuple[KeyLike, bool, bool]] | None = None,
+                   document_writable: bool = False) -> Instruction:
+    accounts: list[tuple[KeyLike, bool, bool]] = [(record, False, True), (signer, True, False),
+                                                   (document, False, document_writable)]
     if fixpoint_accounts is not None:
         accounts.extend(fixpoint_accounts)
     return instruction(program, c.encode_reveal(descendants, tree_root), accounts)
@@ -219,9 +221,80 @@ def summary_select(program: KeyLike, record: KeyLike, challenger: KeyLike, docum
 
 
 def summary_answer(program: KeyLike, record: KeyLike, signer: KeyLike, document: KeyLike,
-                   positions: KeyLike, family_slots: KeyLike, data: bytes) -> Instruction:
-    return instruction(program, data, [(record, False, True), (signer, True, False), (document, False, False),
-                                       (positions, False, False), (family_slots, False, False)])
+                   positions: KeyLike, family_slots: KeyLike, pt2s: KeyLike, routes: KeyLike,
+                   geometry: KeyLike, data: bytes) -> Instruction:
+    return instruction(program, data, [(record, False, True), (signer, True, False),
+                                       (document, False, True), (positions, False, False),
+                                       (family_slots, False, False), (pt2s, False, False),
+                                       (routes, False, False), (geometry, False, False)])
+
+
+def begin_response(program: KeyLike, response: KeyLike, executor: KeyLike, record: KeyLike,
+                   body_length: int, body_sha256: bytes) -> Instruction:
+    if not 1 <= body_length <= 1_048_576:
+        raise ValueError("response body length is outside the DRU1 cap")
+    data = bytes([115]) + c.uint(body_length, 4) + c.digest(body_sha256)
+    return instruction(program, data, [(response, False, True), (executor, True, True),
+                                        (record, False, False), (c.SYSTEM_PROGRAM, False, False)])
+
+
+def grow_response(program: KeyLike, response: KeyLike, executor: KeyLike, record: KeyLike) -> Instruction:
+    return instruction(program, bytes([116]), [(response, False, True), (executor, True, False),
+                                               (record, False, False)])
+
+
+def write_response(program: KeyLike, response: KeyLike, executor: KeyLike, record: KeyLike,
+                   offset: int, chunk: bytes) -> Instruction:
+    if not 1 <= len(chunk) <= 900:
+        raise ValueError("DRU1 write must be 1..900 bytes")
+    data = bytes([125]) + c.uint(offset, 4) + bytes(chunk)
+    return instruction(program, data, [(response, False, True), (executor, True, False),
+                                       (record, False, False)])
+
+
+def seal_response(program: KeyLike, response: KeyLike, executor: KeyLike, record: KeyLike) -> Instruction:
+    return instruction(program, bytes([118]), [(response, False, True), (executor, True, False),
+                                               (record, False, False)])
+
+
+def verify_target(program: KeyLike, record: KeyLike, response: KeyLike, document: KeyLike,
+                  pt2s: KeyLike, pt1s: KeyLike, routes: KeyLike, geometry: KeyLike,
+                  payloads: KeyLike) -> Instruction:
+    return instruction(program, bytes([120]), [(record, False, True), (response, False, False),
+                                               (document, False, False), (pt2s, False, False),
+                                               (pt1s, False, False), (routes, False, False),
+                                               (geometry, False, False), (payloads, False, False)])
+
+
+def verify_reads(program: KeyLike, record: KeyLike, response: KeyLike, document: KeyLike,
+                 positions: KeyLike, routes: KeyLike, geometry: KeyLike, pt2s: KeyLike,
+                 family_slots: KeyLike, first: int, count: int) -> Instruction:
+    if not 1 <= count <= 0xFFFF or not 0 <= first <= 0xFFFF:
+        raise ValueError("read verification range is invalid")
+    data = bytes([121]) + c.uint(first, 2) + c.uint(count, 2)
+    return instruction(program, data, [(record, False, True), (response, False, False),
+                                       (document, False, False), (positions, False, False),
+                                       (routes, False, False), (geometry, False, False),
+                                       (pt2s, False, False), (family_slots, False, False)])
+
+
+def verify_range(program: KeyLike, record: KeyLike, response: KeyLike, document: KeyLike,
+                 positions: KeyLike, routes: KeyLike, geometry: KeyLike, pt2s: KeyLike,
+                 family_slots: KeyLike, read_index: int, first: int, count: int) -> Instruction:
+    if not 1 <= count <= 0xFFFF or not 0 <= first <= 0xFFFF or not 0 <= read_index <= 0xFFFF:
+        raise ValueError("range verification range is invalid")
+    data = bytes([129]) + c.uint(read_index, 2) + c.uint(first, 2) + c.uint(count, 2)
+    return instruction(program, data, [(record, False, True), (response, False, False),
+                                       (document, False, False), (positions, False, False),
+                                       (routes, False, False), (geometry, False, False),
+                                       (pt2s, False, False), (family_slots, False, False)])
+
+
+def execute_response(program: KeyLike, record: KeyLike, response: KeyLike, document: KeyLike,
+                     routes: KeyLike, geometry: KeyLike, pt2s: KeyLike) -> Instruction:
+    return instruction(program, bytes([124]), [(record, False, True), (response, False, False),
+                                               (document, False, True), (routes, False, False),
+                                               (geometry, False, False), (pt2s, False, False)])
 
 
 def timeout(program: KeyLike, record: KeyLike, document: KeyLike) -> Instruction:
